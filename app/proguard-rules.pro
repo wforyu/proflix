@@ -1,0 +1,5 @@
+-dontwarn javax.annotation.**
+-keep class com.proflix.provider.data.api.** { *; }
+-keep class com.proflix.provider.data.model.** { *; }
+-keepattributes Signature
+-keepattributes *Annotation*
