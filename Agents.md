@@ -791,3 +791,74 @@ BUILD SUCCESSFUL in 2m 2s
 **Versi Kotlin**: 2.0.0
 **JVM Target**: 17
 **Total Modul**: 15
+
+---
+
+# AUDIT PLAN (MUST DO BESOK)
+
+> **PRINSIP INTI**: Jangan pukul rata. Beda provider = beda embed host = beda extractor. Audit satu persatu, pahami, resapi, baru implementasikan.
+
+## Per-Provider Audit Checklist
+
+Untuk SETIAP provider (Samehadaku, Oploverz, Anoboy), lakukan langkah ini:
+
+### Step 1: Halaman Home
+- Fetch halaman home via web
+- Bandingkan: apa yg tampil di web vs apa yg di-parse app
+- Cek: judul, poster, episode terbaru, kategori — sudah match belum?
+- Jika beda: catat selector/regex yg salah dan fix
+
+### Step 2: Halaman Detail
+- Fetch halaman detail 1 anime
+- Bandingkan: judul postingan, info (genre, tahun, rating), daftar episode
+- Cek: semua episode muncul? judul episode benar? urutan benar?
+- Cek: episode dari anime lain jangan ikut muncul (salah filter)
+
+### Step 3: Halaman Episode / Stream
+- Fetch halaman episode yg sedang diputar
+- Catat: embed video host apa yg dipake (blogger? turboviplay? sokuja api? upbolt? dll)
+- Catat: ada berapa mirror/server? masing2 host apa?
+- Test: extract masing2 mirror, apakah bisa resolve ke direct MP4/HLS?
+
+### Step 4: Implement Per-Provider Extractor
+- Buat extractor khusus per provider (jangan gabung jadi satu EmbedVideoExtractor)
+- Samehadaku: extractor khusus Samehadaku (API sokuja, iframe, dll)
+- Oploverz: extractor khusus Oploverz (blogger, upbolt, dll)
+- Anoboy: extractor khusus Anoboy (blogger, turboviplay, dll)
+
+### Step 5: Player UI Enhancement
+- Di bawah player, tampilkan daftar episode sesuai postingan yg sedang diputar
+- Judul postingan harus match dgn yg diputar
+- Episode navigation (prev/next) harus sesuai urutan episode postingan
+
+## Detail Per Provider
+
+### Samehadaku (x6.sokuja.uk)
+- **Tipe**: Next.js SPA (SOKUJA) + React Server Components
+- **Embed**: API endpoint `/api/video-mirrors?e={episodeId}` → direct MP4
+- **Extractor**: API-based (bukan iframe scraping)
+- **Catatan**: Episode ID numerik di-extract dari RSC data
+- **Status**: Perlu audit ulang home layout + episode matching
+
+### Oploverz (oploverz.site)
+- **Tipe**: SvelteKit SPA + SSR data
+- **Embed**: `pageData.episodes.data[N].streamUrl[]` → array embed URLs
+- **Host yg dikenal**: blogger.com (95%), upbolt.to, 4meplayer.pro, filedon.co, abyssplayer.com
+- **Extractor**: Per-host extraction (blogger batchexecute, upbolt direct, dll)
+- **Catatan**: Jangan pukul rata pakai 1 extractor
+
+### Anoboy (anoboy.pk)
+- **Tipe**: WordPress + AnimeStream Theme
+- **Embed**: Mirror `<select>` base64-encoded iframe HTML
+- **Host yg dikenal**: blogger.com, turboviplay.com, turbovidhls.com
+- **Extractor**: Per-host extraction
+- **Catatan**: Base64 decode → iframe src → resolve per host
+
+## Player UI Requirements
+- [ ] Episode list di bawah player
+- [ ] Judul postingan yg benar (match dgn yg diputar)
+- [ ] Episode navigation sesuai urutan
+- [ ] Source/mirror selector yg jelas
+- [ ] Skip opening/ending buttons
+- [ ] Auto-play next episode toggle
+- [ ] Netflix-like dark design
