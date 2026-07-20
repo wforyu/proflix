@@ -20,6 +20,7 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import javax.inject.Inject
 import javax.inject.Singleton
+import android.util.Log
 
 @Singleton
 class SamehadakuProvider @Inject constructor(
@@ -30,6 +31,7 @@ class SamehadakuProvider @Inject constructor(
 
     companion object {
         var BASE_URL = "https://x6.sokuja.uk"
+        private const val TAG = "SamehadakuProvider"
     }
 
     override suspend fun getHome(): Result<HomeContent> = withContext(Dispatchers.IO) {
@@ -37,11 +39,12 @@ class SamehadakuProvider @Inject constructor(
             val html = fetchHtml(BASE_URL)
             val doc = Jsoup.parse(html, BASE_URL)
 
+            val hero = parseHeroFromRsc(html, doc)
             val trending = parseSidebarPopular(doc)
-            val latest = parseRscLatest(html, doc)
+            val latest = parseLatestFromRsc(html)
 
             HomeContent(
-                heroContent = parseHeroFromRsc(html, doc),
+                heroContent = hero,
                 trending = trending,
                 latest = latest,
                 continueWatching = emptyList(),
@@ -64,8 +67,7 @@ class SamehadakuProvider @Inject constructor(
     override suspend fun getLatest(): Result<List<Content>> = withContext(Dispatchers.IO) {
         safeCall {
             val html = fetchHtml(BASE_URL)
-            val doc = Jsoup.parse(html, BASE_URL)
-            parseRscLatest(html, doc)
+            parseLatestFromRsc(html)
         }
     }
 
@@ -141,6 +143,14 @@ class SamehadakuProvider @Inject constructor(
         safeCall {
             val url = if (contentId.startsWith("http")) contentId else "$BASE_URL/$contentId"
             val html = fetchHtml(url)
+
+            val episodesFromRsc = parseEpisodesFromRsc(html, contentId)
+            if (episodesFromRsc.isNotEmpty()) {
+                Log.d(TAG, "Parsed ${episodesFromRsc.size} episodes from RSC data")
+                return@safeCall episodesFromRsc.sortedBy { it.number }
+            }
+
+            Log.d(TAG, "RSC episodes empty, falling back to HTML parsing")
             val doc = Jsoup.parse(html, url)
             val episodes = mutableListOf<Episode>()
 
@@ -328,14 +338,16 @@ class SamehadakuProvider @Inject constructor(
 
             for (i in 0 until mirrors.length()) {
                 val mirror = mirrors.optJSONObject(i) ?: continue
-                val embedUrl = mirror.optString("embedUrl", "")
+                val videoUrl = mirror.optString("url", "")
+                    .ifBlank { mirror.optString("src", "") }
+                    .ifBlank { mirror.optString("embedUrl", "") }
                 val quality = mirror.optString("quality", mirror.optString("serverName", "default"))
 
-                if (embedUrl.isNotBlank()) {
-                    val format = EmbedVideoExtractor.detectFormat(embedUrl)
+                if (videoUrl.isNotBlank()) {
+                    val format = EmbedVideoExtractor.detectFormat(videoUrl)
                     sources.add(
                         StreamSource(
-                            url = embedUrl,
+                            url = videoUrl,
                             quality = quality,
                             format = format.extension
                         )
@@ -343,7 +355,7 @@ class SamehadakuProvider @Inject constructor(
                 }
             }
         } catch (e: Exception) {
-            android.util.Log.w("SamehadakuProvider", "fetchVideoMirrors failed: ${e.message}")
+            Log.w(TAG, "fetchVideoMirrors failed: ${e.message}")
         }
 
         return sources
@@ -391,6 +403,16 @@ class SamehadakuProvider @Inject constructor(
                 val poster = getImageUrl(heroLink.selectFirst("img")) ?: ""
                 val desc = heroLink.selectFirst("p.text-sm, .text-gray-300")?.text() ?: ""
 
+                val genres = mutableListOf<String>()
+                for (a in s0Div.select("a[href*=\"/genre/\"]")) {
+                    val g = a.text().trim()
+                    if (g.isNotBlank() && g !in genres) genres.add(g)
+                }
+
+                val rating = s0Div.select("span").mapNotNull { it.text().trim() }
+                    .firstOrNull { it.startsWith("★") }
+                    ?.replace("★", "")?.trim() ?: ""
+
                 if (title.isNotBlank()) {
                     return Content(
                         id = id,
@@ -398,78 +420,68 @@ class SamehadakuProvider @Inject constructor(
                         poster = poster,
                         banner = poster,
                         description = desc,
-                        genres = emptyList(),
+                        genres = genres,
                         year = "",
-                        rating = "",
+                        rating = rating,
                         type = ContentType.ANIME
                     )
                 }
             }
         }
 
-        val titlePattern = Regex("""\"name\"\s*:\s*\"([^\"]+)\"""")
-        val descPattern = Regex("""\"description\"\s*:\s*\"([^\"]{10,200})\"""")
-        val imgPattern = Regex("""\"image\"\s*:\s*\"([^\"]+)\"""")
-        val ratingPattern = Regex("""\"ratingValue\"\s*:\s*\"?(\d+\.?\d*)\"?""")
+        val heroPattern = Regex("\"slug\":\"([^\"]+)-subtitle-indonesia\"")
+        val titlePattern = Regex("""\"name"\s*:\s*"([^"]+)"""")
+        val imgPattern = Regex("""\"bannerUrl"\s*:\s*"([^"]+)"""")
+        val scorePattern = Regex("""\"score"\s*:\s*(\d+\.?\d*)""")
+        val tagsPattern = Regex("""\{"tag":\{"name":"([^"]+)","slug":"([^"]+)","type":"genre"\}""")
 
-        val title = titlePattern.find(html)?.groupValues?.get(1) ?: return null
-        val desc = descPattern.find(html)?.groupValues?.get(1) ?: ""
+        val slug = heroPattern.find(html)?.groupValues?.get(1) ?: return null
+        val title = titlePattern.find(html)?.groupValues?.get(1) ?: slug
+            .replace("-", " ").replaceFirstChar { it.uppercase() }
         val img = imgPattern.find(html)?.groupValues?.get(1) ?: ""
-        val rating = ratingPattern.find(html)?.groupValues?.get(1) ?: ""
+        val score = scorePattern.find(html)?.groupValues?.get(1) ?: ""
 
-        val genres = mutableListOf<String>()
-        for (a in doc.select("a[href*=\"/genre/\"]")) {
-            val g = a.text().trim()
-            if (g.isNotBlank() && g !in genres) genres.add(g)
+        val genres = tagsPattern.findAll(html).map { it.groupValues[1] }.distinct().take(5).toList()
+
+        val poster = when {
+            img.startsWith("http") -> img
+            img.startsWith("/") -> "$BASE_URL$img"
+            else -> img
         }
 
         return Content(
-            id = "",
+            id = "$slug-subtitle-indonesia",
             title = title,
-            poster = img,
-            banner = img,
-            description = desc,
-            genres = genres.take(5),
+            poster = poster,
+            banner = poster,
+            description = "",
+            genres = genres,
             year = "",
-            rating = rating,
+            rating = score,
             type = ContentType.ANIME
         )
     }
 
-    private fun parseRscLatest(html: String, doc: Document): List<Content> {
+    private fun parseLatestFromRsc(html: String): List<Content> {
         val contents = mutableListOf<Content>()
         val seen = mutableSetOf<String>()
 
-        for (a in doc.select("a[href*=\"-episode-\"][href*=\"-subtitle-indonesia\"]")) {
-            val href = a.attr("href").trim()
-            val slug = href.removePrefix(BASE_URL).trimStart('/')
+        val episodePattern = Regex(""""href"\s*:\s*"/([^"]+?)-episode-(\d+)-subtitle-indonesia/"""")
+        for (match in episodePattern.findAll(html)) {
+            val slug = match.groupValues[1]
             if (slug.isBlank() || slug in seen) continue
 
-            val animeSlug = Regex("(.+?)-episode-\\d+").find(slug)?.groupValues?.get(1) ?: continue
-            if (animeSlug.isBlank() || animeSlug in seen) continue
-
-            seen.add(animeSlug)
             seen.add(slug)
 
-            val epNum = Regex("episode-(\\d+)").find(slug)?.groupValues?.get(1)?.toIntOrNull()
-
-            val epTitle = a.selectFirst(".text-gray-200, .font-medium")?.text()?.trim()
-                ?: a.text().trim().ifBlank { null }
-
-            val displayTitle = if (!epTitle.isNullOrBlank() && !epTitle.contains("Episode", ignoreCase = true)) {
-                epTitle
-            } else {
-                animeSlug.replace("-", " ").replaceFirstChar { it.uppercase() }
-            }
-
-            val poster = getImageUrl(a.selectFirst("img")) ?: ""
+            val epNum = match.groupValues[2].toIntOrNull()
+            val title = slug.replace("-", " ").replaceFirstChar { it.uppercase() }
 
             contents.add(
                 Content(
-                    id = animeSlug,
-                    title = displayTitle,
-                    poster = poster,
-                    banner = poster,
+                    id = "$slug-subtitle-indonesia",
+                    title = title,
+                    poster = "",
+                    banner = "",
                     description = if (epNum != null) "Episode $epNum" else "",
                     genres = emptyList(),
                     year = "",
@@ -482,15 +494,15 @@ class SamehadakuProvider @Inject constructor(
         }
 
         if (contents.isEmpty()) {
-            val epPattern = Regex("\"([^\"]+)-episode-(\\d+)-subtitle-indonesia\"")
-            for (match in epPattern.findAll(html)) {
-                val animeSlug = match.groupValues[1]
-                if (animeSlug !in seen) {
-                    seen.add(animeSlug)
-                    val title = animeSlug.replace("-", " ").replaceFirstChar { it.uppercase() }
+            val altPattern = Regex("\"([^\"]+)-episode-(\\d+)-subtitle-indonesia\"")
+            for (match in altPattern.findAll(html)) {
+                val slug = match.groupValues[1]
+                if (slug.isNotBlank() && slug !in seen) {
+                    seen.add(slug)
+                    val title = slug.replace("-", " ").replaceFirstChar { it.uppercase() }
                     contents.add(
                         Content(
-                            id = animeSlug,
+                            id = "$slug-subtitle-indonesia",
                             title = title,
                             poster = "",
                             banner = "",
@@ -501,10 +513,90 @@ class SamehadakuProvider @Inject constructor(
                             type = ContentType.ANIME
                         )
                     )
+                    if (contents.size >= 20) break
                 }
             }
         }
 
         return contents.take(20)
+    }
+
+    private fun parseEpisodesFromRsc(html: String, contentId: String): List<Episode> {
+        val episodes = mutableListOf<Episode>()
+
+        val episodesArrayPattern = Regex("\"episodes\":\\[(.+?)\\](?=,\\s*\"episodes(?:Total|Count)\")")
+        val match = episodesArrayPattern.find(html)
+
+        if (match == null) {
+            val altPattern = Regex("\"episodes\":\\[(\\{.*?\\}(?:,\\{.*?\\})*)\\]")
+            val altMatch = altPattern.find(html) ?: return episodes
+            return parseEpisodesArray(altMatch.groupValues[1], contentId)
+        }
+
+        return parseEpisodesArray(match.groupValues[1], contentId)
+    }
+
+    private fun parseEpisodesArray(arrayContent: String, contentId: String): List<Episode> {
+        val episodes = mutableListOf<Episode>()
+
+        if (arrayContent.isBlank()) return episodes
+
+        try {
+            val jsonArray = JSONArray("[$arrayContent]")
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.optJSONObject(i) ?: continue
+                val slug = obj.optString("slug", "")
+                val title = obj.optString("title", "")
+                val epNum = obj.optInt("episodeNumber", 0)
+                val epId = obj.optInt("id", 0)
+
+                if (slug.isBlank()) continue
+
+                val epUrl = if (slug.endsWith("-subtitle-indonesia")) slug else "$slug-subtitle-indonesia"
+                val displayTitle = title.ifBlank { "Episode $epNum" }
+
+                episodes.add(
+                    Episode(
+                        id = epUrl,
+                        contentId = contentId,
+                        season = 1,
+                        number = epNum,
+                        title = displayTitle,
+                        description = "",
+                        thumbnail = "",
+                        duration = 0L
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse episodes JSON: ${e.message}")
+
+            val entryPattern = Regex("\\{\"id\":(\\d+),\"slug\":\"([^\"]+)\",\"title\":\"([^\"]*)\",\"episodeNumber\":(\\d+)")
+            for (entry in entryPattern.findAll(arrayContent)) {
+                val slug = entry.groupValues[2]
+                val title = entry.groupValues[3]
+                val epNum = entry.groupValues[4].toIntOrNull() ?: 0
+
+                if (slug.isBlank()) continue
+
+                val epUrl = if (slug.endsWith("-subtitle-indonesia")) slug else "$slug-subtitle-indonesia"
+                val displayTitle = title.ifBlank { "Episode $epNum" }
+
+                episodes.add(
+                    Episode(
+                        id = epUrl,
+                        contentId = contentId,
+                        season = 1,
+                        number = epNum,
+                        title = displayTitle,
+                        description = "",
+                        thumbnail = "",
+                        duration = 0L
+                    )
+                )
+            }
+        }
+
+        return episodes
     }
 }
