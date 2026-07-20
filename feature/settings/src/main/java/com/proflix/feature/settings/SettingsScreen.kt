@@ -135,7 +135,7 @@ fun SettingsScreen(
             providerType = ProviderType.SAMEHADAKU,
             displayName = "Samehadaku",
             currentDomain = domainState.samehadakuDomain,
-            defaultDomain = "https://x6.sokuja.uk",
+            defaultDomain = "https://v2.samehadaku.how",
             isSelected = selectedProvider == ProviderType.SAMEHADAKU,
             onEdit = { editingDomain = ProviderType.SAMEHADAKU }
         )

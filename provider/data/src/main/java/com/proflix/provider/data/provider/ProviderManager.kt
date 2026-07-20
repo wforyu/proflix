@@ -33,7 +33,7 @@ class ProviderManager @Inject constructor(
         val url = domain.trimEnd('/')
         when (type) {
             ProviderType.ANOBOY -> AnoboyProvider.BASE_URL = url.ifBlank { "https://anoboy.pk" }
-            ProviderType.SAMEHADAKU -> SamehadakuProvider.BASE_URL = url.ifBlank { "https://x6.sokuja.uk" }
+            ProviderType.SAMEHADAKU -> SamehadakuProvider.BASE_URL = url.ifBlank { "https://v2.samehadaku.how" }
             ProviderType.OPLOVERZ -> {
                 OploverzProvider.BASE_URL = url.ifBlank { "https://backapi.oploverz.ac" }
                 OploverzProvider.BASE_URL = url.ifBlank { "https://oploverz.site" }
@@ -43,7 +43,7 @@ class ProviderManager @Inject constructor(
 
     fun getDefaultDomain(type: ProviderType): String = when (type) {
         ProviderType.ANOBOY -> "https://anoboy.pk"
-        ProviderType.SAMEHADAKU -> "https://x6.sokuja.uk"
+        ProviderType.SAMEHADAKU -> "https://v2.samehadaku.how"
         ProviderType.OPLOVERZ -> "https://oploverz.site"
     }
 }
