@@ -20,15 +20,18 @@ import javax.inject.Singleton
 
 @Singleton
 class SamehadakuProvider @Inject constructor(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val embedVideoExtractor: com.proflix.core.network.EmbedVideoExtractor
 ) : Provider {
 
-    private val streamExtractor = SamehadakuStreamExtractor(okHttpClient)
+    private val streamExtractor = SamehadakuStreamExtractor(okHttpClient, embedVideoExtractor)
 
     companion object {
-        var BASE_URL = "https://v2.samehadaku.how"
+        @Volatile var BASE_URL = "https://v2.samehadaku.how"
         private const val TAG = "SamehadakuProvider"
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        private val EPISODE_NUM_REGEX = Regex("episode[- ]?(\\d+)")
+        private val RATING_REGEX = Regex("([0-9]+\\.?[0-9]*)")
     }
 
     override suspend fun getHome(): Result<HomeContent> = withContext(Dispatchers.IO) {
@@ -37,6 +40,13 @@ class SamehadakuProvider @Inject constructor(
             val latest = parseLatestEpisodes(doc)
             val hero = latest.firstOrNull()
 
+            var daftarAnime = emptyList<Content>()
+            try {
+                daftarAnime = parseDaftarAnime()
+            } catch (e: Exception) {
+                Log.w(TAG, "Daftar anime fetch failed (non-critical): ${e.message}")
+            }
+
             HomeContent(
                 heroContent = hero,
                 trending = emptyList(),
@@ -44,6 +54,7 @@ class SamehadakuProvider @Inject constructor(
                 continueWatching = emptyList(),
                 categories = buildMap {
                     if (latest.isNotEmpty()) put("Episode Terbaru", latest)
+                    if (daftarAnime.isNotEmpty()) put("Daftar Anime", daftarAnime)
                 }
             )
         }
@@ -89,7 +100,23 @@ class SamehadakuProvider @Inject constructor(
             val scoreEl = doc.selectFirst(".score")
             if (scoreEl != null) {
                 val scoreText = scoreEl.text().trim()
-                rating = scoreText.replace(Regex("[^0-9.]"), "").trim()
+                rating = RATING_REGEX.find(scoreText)?.groupValues?.get(1)?.trim() ?: ""
+            }
+
+            val yearEl = doc.selectFirst(".infox .spe span, .spe span")
+            if (yearEl != null) {
+                val yearText = yearEl.text().trim()
+                if (yearText.contains("Year") || yearText.contains("Tahun")) {
+                    year = yearText.substringAfter(":").trim()
+                }
+            }
+            if (year.isBlank()) {
+                doc.select(".infox .spe span, .spe span").forEach { span ->
+                    val text = span.text().trim()
+                    if (text.contains("Year") || text.contains("Tahun")) {
+                        year = text.substringAfter(":").trim()
+                    }
+                }
             }
 
             val typeEl = doc.selectFirst(".animepost .type")
@@ -157,6 +184,10 @@ class SamehadakuProvider @Inject constructor(
                 }
             }
 
+            if (sources.isEmpty()) {
+                throw Exception("Tidak ada stream tersedia. Kemungkinan situs terkena Cloudflare protection atau server sedang down.")
+            }
+
             Log.d(TAG, "Resolved ${sources.size} stream sources")
             sources
         }
@@ -178,7 +209,7 @@ class SamehadakuProvider @Inject constructor(
                     ?: ""
                 val poster = article.selectFirst("img.anmsa")?.attr("src") ?: ""
                 val scoreText = article.selectFirst(".score")?.text()?.trim() ?: ""
-                val rating = scoreText.replace(Regex("[^0-9.]"), "").trim()
+                val rating = RATING_REGEX.find(scoreText)?.groupValues?.get(1)?.trim() ?: ""
                 val typeText = article.selectFirst(".type")?.text()?.trim() ?: ""
 
                 val genres = mutableListOf<String>()
@@ -259,7 +290,7 @@ class SamehadakuProvider @Inject constructor(
 
             val epNumText = li.selectFirst("div.epsright span.eps a")?.text()?.trim() ?: ""
             val epNum = epNumText.toIntOrNull()
-                ?: Regex("episode[- ]?(\\d+)").find(epUrl.lowercase())?.groupValues?.get(1)?.toIntOrNull()
+                ?: EPISODE_NUM_REGEX.find(epUrl.lowercase())?.groupValues?.get(1)?.toIntOrNull()
                 ?: (episodes.size + 1)
 
             val displayTitle = epLink.text().trim().ifBlank { "Episode $epNum" }
@@ -283,6 +314,61 @@ class SamehadakuProvider @Inject constructor(
         return episodes
     }
 
+    private fun parseDaftarAnime(): List<Content> {
+        val contents = mutableListOf<Content>()
+        try {
+            val doc = fetchDocument("$BASE_URL/daftar-anime-2/")
+            Log.d(TAG, "Fetched daftar anime page")
+
+            for (article in doc.select("article.animpost")) {
+                val link = article.selectFirst("a[href*=\"/anime/\"]") ?: continue
+                val href = link.attr("href").trim()
+                val id = href.removePrefix(BASE_URL).trimStart('/')
+                if (id.isBlank()) continue
+
+                val title = article.selectFirst(".data .title h2")?.text()?.trim()
+                    ?: article.selectFirst("img.anmsa")?.attr("alt")?.trim()
+                    ?: ""
+                val poster = article.selectFirst("img.anmsa")?.attr("src") ?: ""
+                val scoreText = article.selectFirst(".score")?.text()?.trim() ?: ""
+                val rating = RATING_REGEX.find(scoreText)?.groupValues?.get(1)?.trim() ?: ""
+                val typeText = article.selectFirst(".type")?.text()?.trim() ?: ""
+
+                val genres = mutableListOf<String>()
+                for (a in article.select(".mta a[href*=\"/genre/\"]")) {
+                    val g = a.text().trim()
+                    if (g.isNotBlank() && g !in genres) genres.add(g)
+                }
+
+                val contentType = when {
+                    typeText.contains("Movie", true) -> ContentType.MOVIE
+                    else -> ContentType.ANIME
+                }
+
+                if (title.isNotBlank() && id.isNotBlank() && contents.none { it.id == id }) {
+                    contents.add(
+                        Content(
+                            id = id,
+                            title = title,
+                            poster = poster,
+                            banner = poster,
+                            description = "",
+                            genres = genres,
+                            year = "",
+                            rating = rating,
+                            type = contentType
+                        )
+                    )
+                }
+            }
+
+            Log.d(TAG, "Parsed ${contents.size} daftar anime entries")
+        } catch (e: Exception) {
+            Log.w(TAG, "parseDaftarAnime failed: ${e.message}")
+        }
+        return contents.take(50)
+    }
+
     private fun resolveUrl(id: String): String {
         return when {
             id.startsWith("http") -> id
@@ -299,13 +385,20 @@ class SamehadakuProvider @Inject constructor(
     private fun fetchHtml(url: String): String {
         val request = Request.Builder()
             .url(url)
-            .addHeader("User-Agent", USER_AGENT)
-            .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+            .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
             .addHeader("Accept-Language", "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7")
+            .addHeader("Sec-Fetch-Dest", "document")
+            .addHeader("Sec-Fetch-Mode", "navigate")
+            .addHeader("Sec-Fetch-Site", "none")
+            .addHeader("Upgrade-Insecure-Requests", "1")
             .build()
 
         val response = okHttpClient.newCall(request).execute()
         response.use {
+            if (!it.isSuccessful) {
+                throw Exception("HTTP ${it.code} from $url")
+            }
             return it.body?.string() ?: throw Exception("Empty response from $url")
         }
     }

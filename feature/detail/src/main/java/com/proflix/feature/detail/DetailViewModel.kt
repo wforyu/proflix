@@ -31,9 +31,7 @@ class DetailViewModel @Inject constructor(
     private val favoriteDao: FavoriteDao
 ) : ViewModel() {
 
-    private val contentId: String = java.net.URLDecoder.decode(
-        savedStateHandle["contentId"] ?: "", "UTF-8"
-    )
+    private val contentId: String = savedStateHandle["contentId"] ?: ""
 
     private val _uiState = MutableStateFlow(DetailUiState())
     val uiState: StateFlow<DetailUiState> = _uiState.asStateFlow()
@@ -42,7 +40,7 @@ class DetailViewModel @Inject constructor(
         loadDetail()
     }
 
-    private fun loadDetail() {
+    fun loadDetail() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
@@ -70,7 +68,7 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = providerRepository.getEpisodes(contentId)) {
                 is Result.Success -> {
-                    _uiState.value = _uiState.value.copy(episodes = result.data)
+                    _uiState.value = _uiState.value.copy(episodes = result.data.sortedBy { it.number })
                 }
                 is Result.Error -> {}
                 is Result.Loading -> {}

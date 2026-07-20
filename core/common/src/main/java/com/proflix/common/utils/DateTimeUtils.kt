@@ -5,7 +5,12 @@ import java.util.Date
 import java.util.Locale
 
 object DateTimeUtils {
-    private val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+    private val dateFormatThreadLocal = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat {
+            return SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+        }
+    }
+    private val dateFormat: SimpleDateFormat get() = dateFormatThreadLocal.get()!!
 
     fun formatDate(timestamp: Long): String {
         return dateFormat.format(Date(timestamp))

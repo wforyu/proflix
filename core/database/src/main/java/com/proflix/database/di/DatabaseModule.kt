@@ -25,7 +25,7 @@ object DatabaseModule {
             context,
             ProFlixDatabase::class.java,
             Constants.DATABASE_NAME
-        ).build()
+        ).fallbackToDestructiveMigration().build()
     }
 
     @Provides

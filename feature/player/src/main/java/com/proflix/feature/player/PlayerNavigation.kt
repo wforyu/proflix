@@ -9,9 +9,9 @@ import androidx.navigation.navArgument
 const val PLAYER_ROUTE = "player?episodeId={episodeId}&title={title}&contentId={contentId}"
 
 fun NavController.navigateToPlayer(episodeId: String, title: String, contentId: String = "") {
-    val encodedId = java.net.URLEncoder.encode(episodeId, "UTF-8")
-    val encodedTitle = java.net.URLEncoder.encode(title, "UTF-8")
-    val encodedContentId = java.net.URLEncoder.encode(contentId, "UTF-8")
+    val encodedId = android.net.Uri.encode(episodeId, null)
+    val encodedTitle = android.net.Uri.encode(title, null)
+    val encodedContentId = android.net.Uri.encode(contentId, null)
     navigate("player?episodeId=$encodedId&title=$encodedTitle&contentId=$encodedContentId")
 }
 
@@ -27,15 +27,9 @@ fun NavGraphBuilder.playerScreen(
             navArgument("contentId") { type = NavType.StringType; defaultValue = "" }
         )
     ) { backStackEntry ->
-        val episodeId = java.net.URLDecoder.decode(
-            backStackEntry.arguments?.getString("episodeId") ?: "", "UTF-8"
-        )
-        val title = java.net.URLDecoder.decode(
-            backStackEntry.arguments?.getString("title") ?: "", "UTF-8"
-        )
-        val contentId = java.net.URLDecoder.decode(
-            backStackEntry.arguments?.getString("contentId") ?: "", "UTF-8"
-        )
+        val episodeId = backStackEntry.arguments?.getString("episodeId") ?: ""
+        val title = backStackEntry.arguments?.getString("title") ?: ""
+        val contentId = backStackEntry.arguments?.getString("contentId") ?: ""
 
         StreamPlayerScreen(
             episodeId = episodeId,

@@ -8,8 +8,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
+import javax.inject.Inject
+import javax.inject.Singleton
 
-class EmbedVideoExtractor(
+@Singleton
+class EmbedVideoExtractor @Inject constructor(
     private val okHttpClient: OkHttpClient
 ) {
     companion object {
@@ -17,7 +20,10 @@ class EmbedVideoExtractor(
 
         private val BLOGGER_RPC_IDS = listOf(
             "jrwoqf", "H1TAV", "UQiIPe", "bcGtuc", "hruxee",
-            "UvZcsc", "Augo5c", "vBV9id", "p6vSuf", "Ppwqme"
+            "UvZcsc", "Augo5c", "vBV9id", "p6vSuf", "Ppwqme",
+            "kPOBAc", "XZBBvd", "cWN23c", "RKg7re", "Uf0Lzf",
+            "IO3One", "aBBWjd", "mGQ3hc", "fGubx", "aJMCnf",
+            "xmeGFd", "rrTD8"
         )
 
         private val PARAM_FORMATS = listOf<(String) -> String>(
@@ -26,6 +32,8 @@ class EmbedVideoExtractor(
             { token -> """["$token",null]""" },
             { token -> """["$token",""]""" },
             { token -> """["${token.trim()}"]""" },
+            { token -> """["${token.trim()}","",null,""]""" },
+            { token -> """["${token.trim()}",null,""]""" },
         )
 
         fun isDirectVideoUrl(url: String): Boolean {
@@ -87,15 +95,32 @@ class EmbedVideoExtractor(
     }
 
     private fun resolveBloggerUrl(bloggerUrl: String): VideoResult? {
-        val token = extractBloggerToken(bloggerUrl) ?: return null
+        val token = extractBloggerToken(bloggerUrl)
+        if (token == null) {
+            Log.w(TAG, "Failed to extract Blogger token from: $bloggerUrl")
+            return null
+        }
+
+        Log.d(TAG, "Resolving Blogger URL with token: ${token.take(40)}...")
 
         val batchResult = resolveViaBatchexecute(token)
         if (batchResult != null) return batchResult
 
+        Log.d(TAG, "Batchexecute failed, trying embed page scraping...")
+
         return try {
             val html = fetchHtml(bloggerUrl, "https://www.blogger.com/")
-            extractVideoUrlFromBloggerPage(html)
-        } catch (_: Exception) {
+            Log.d(TAG, "Fetched embed page: ${html.length} bytes")
+
+            val result = extractVideoUrlFromBloggerPage(html)
+            if (result != null) {
+                Log.d(TAG, "Found video URL from embed page")
+            } else {
+                Log.w(TAG, "No video URL found in embed page for token: ${token.take(30)}...")
+            }
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to fetch embed page: ${e.message}")
             null
         }
     }
@@ -121,12 +146,13 @@ class EmbedVideoExtractor(
 
     private fun resolveViaBatchexecute(token: String): VideoResult? {
         val url = "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute"
+        var lastResponsePreview = ""
 
         for (rpcId in BLOGGER_RPC_IDS) {
             for (paramBuilder in PARAM_FORMATS) {
                 try {
                     val params = paramBuilder(token)
-                    val innerPayload = """${params.replace("\"", "\\\"")}"""
+                    val innerPayload = params.replace("\"", "\\\"")
                     val rpcPayload = """[["$rpcId","${innerPayload}",null,"generic"]]"""
                     val formBody = "f.req=${java.net.URLEncoder.encode(rpcPayload, "UTF-8")}"
 
@@ -141,18 +167,27 @@ class EmbedVideoExtractor(
                         .build()
 
                     val response = okHttpClient.newCall(request).execute()
-                    val body = response.body?.string() ?: continue
+                    val body = response.use { it.body?.string() } ?: continue
 
-                    if (body.isBlank() || body.startsWith("<!")) continue
+                    if (body.isBlank() || body.startsWith("<!") || body.startsWith("<html")) {
+                        Log.d(TAG, "batchexecute rpcId=$rpcId got HTML/blank response (${body.length} bytes)")
+                        continue
+                    }
+
+                    lastResponsePreview = body.take(200)
 
                     val videoUrl = parseBatchexecuteResponse(body)
                     if (videoUrl != null) {
-                        Log.d(TAG, "batchexecute resolved via rpcId=$rpcId params=$params")
+                        Log.d(TAG, "batchexecute RESOLVED via rpcId=$rpcId params=$params -> ${videoUrl.take(100)}")
                         return VideoResult(url = videoUrl, format = detectFormat(videoUrl))
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.d(TAG, "batchexecute rpcId=$rpcId error: ${e.message}")
+                }
             }
         }
+
+        Log.w(TAG, "batchexecute all attempts failed. Last response: $lastResponsePreview")
         return null
     }
 
@@ -211,6 +246,16 @@ class EmbedVideoExtractor(
             return directUrl
         }
 
+        val unescaped = cleanBody
+            .replace("\\u003d", "=")
+            .replace("\\u0026", "&")
+            .replace("\\/", "/")
+        val unescapedUrl = extractGoogleVideoUrl(unescaped)
+        if (unescapedUrl != null) {
+            Log.d(TAG, "parseBatchexecuteResponse found via unescaped raw regex")
+            return unescapedUrl
+        }
+
         return null
     }
 
@@ -229,7 +274,8 @@ class EmbedVideoExtractor(
             val fields = listOf(
                 "playback_url", "playbackUrl", "video_url", "videoUrl",
                 "stream_url", "streamUrl", "url", "src",
-                "content_url", "contentUrl", "embedUrl"
+                "content_url", "contentUrl", "embedUrl",
+                "hlsUrl", "dashUrl", "mp4Url", "directUrl"
             )
             for (field in fields) {
                 val url = jsonData.optString(field, "")
@@ -252,6 +298,10 @@ class EmbedVideoExtractor(
                     if (value.startsWith("{")) {
                         val deepUrl = extractVideoUrlFromJsonString(value)
                         if (deepUrl != null) return deepUrl
+                    }
+                    if (value.contains("googlevideo.com")) {
+                        val extracted = extractGoogleVideoUrl(value)
+                        if (extracted != null) return extracted
                     }
                 }
                 if (value is JSONObject) {
@@ -283,6 +333,8 @@ class EmbedVideoExtractor(
             Regex("""https?:\\?/\\?/[a-z0-9.-]*googlevideo\.com\\?/videoplayback[^"'\\]+"""),
             Regex("""https?://[a-z0-9.-]+\.googlevideo\.com/[^'"\s<>]+"""),
             Regex("""https?://[a-z0-9.-]*googlevideo\.com/videoplayback[^'"\\]+"""),
+            Regex("""https?://rr[0-9]---[a-z0-9.-]*\.googlevideo\.com/[^'"\s<>]+"""),
+            Regex("""https?://[a-z0-9.-]*\.googlevideo\.com/[^'"\s<>]+"""),
         )
 
         for (pattern in patterns) {
@@ -292,9 +344,12 @@ class EmbedVideoExtractor(
                 .replace("\\u0026", "&")
                 .replace("\\/", "/")
                 .replace("\\\\", "\\")
-                .trimEnd('\'', '"', ',', ';', ')')
+                .trimEnd('\'', '"', ',', ';', ')', ']', '}')
 
-            if (url.contains("googlevideo.com/videoplayback")) {
+            if (url.contains("googlevideo.com")) {
+                if (!url.contains("videoplayback") && url.contains("googlevideo.com/")) {
+                    continue
+                }
                 return url
             }
         }
@@ -370,7 +425,10 @@ class EmbedVideoExtractor(
             "etvp.cc", "turboviplay.com", "sptvp.com",
             "turbovidhls.com", "embedwish.com", "sumpiernos.com",
             "vcdn2.mystream.to", "filedon.co", "upbolt.to",
-            "4meplayer.com", "4meplayer.pro", "abyssplayer.com"
+            "4meplayer.com", "4meplayer.pro", "abyssplayer.com",
+            "sokuja.uk", "sokuja.me", "stbnet.cc", "opstream",
+            "mp4upload.com", "streamtape.com", "streamsb.com",
+            "doodstream.com", "lendrive.link", "vidstreaming"
         )
         val hostPattern = Regex("""(https?://[a-z0-9.-]*(?:${videoHosts.joinToString("|") { Regex.escape(it) }})[^\s"'<>]*)""")
         hostPattern.find(html)?.let { match ->
@@ -395,6 +453,6 @@ class EmbedVideoExtractor(
             .build()
 
         val response = okHttpClient.newCall(request).execute()
-        return response.body?.string() ?: throw Exception("Empty response")
+        return response.use { it.body?.string() ?: throw Exception("Empty response") }
     }
 }

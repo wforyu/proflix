@@ -59,7 +59,7 @@ class PreferencesManager @Inject constructor(
         prefs[Keys.SUBTITLE_LANGUAGE] ?: "en"
     }
 
-    val isFavorite: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val isPiPEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[Keys.PI_ENABLED] ?: false
     }
 

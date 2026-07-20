@@ -18,7 +18,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
@@ -50,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.proflix.provider.domain.model.Content
+import com.proflix.provider.domain.model.ContinueWatchingItem
 import com.proflix.provider.domain.ProviderType
 
 @Composable
@@ -59,62 +62,102 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    if (uiState.isLoading) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Loading from ${uiState.currentProvider.displayName}...",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.Gray
+    when {
+        uiState.isLoading -> {
+            LoadingScreen(providerName = uiState.currentProvider.displayName)
+        }
+        uiState.error != null && uiState.trending.isEmpty() -> {
+            ErrorScreen(
+                message = uiState.error ?: "Unknown error",
+                onRetry = { viewModel.loadHome() }
+            )
+        }
+        else -> {
+            HomeContent(
+                uiState = uiState,
+                onContentClick = onContentClick,
+                onProviderSelected = { viewModel.switchProvider(it) },
+                onRetry = { viewModel.loadHome() }
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoadingScreen(providerName: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(
+                color = Color.Red,
+                strokeWidth = 3.dp
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Loading from $providerName...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.Gray
+            )
+        }
+    }
+}
+
+@Composable
+private fun ErrorScreen(
+    message: String,
+    onRetry: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Something went wrong",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            IconButton(onClick = onRetry) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Retry",
+                    tint = Color.Red
                 )
             }
         }
-        return
     }
+}
 
-    if (uiState.error != null && uiState.trending.isEmpty()) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "Failed to load content",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = uiState.error ?: "Unknown error",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                IconButton(onClick = { viewModel.loadHome() }) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Retry",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-        }
-        return
-    }
-
+@Composable
+private fun HomeContent(
+    uiState: HomeUiState,
+    onContentClick: (String) -> Unit,
+    onProviderSelected: (ProviderType) -> Unit,
+    onRetry: () -> Unit
+) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
         contentPadding = PaddingValues(bottom = 80.dp)
     ) {
         item {
-            ProviderSelector(
+            TopBar(
                 currentProvider = uiState.currentProvider,
-                onProviderSelected = { viewModel.switchProvider(it) }
+                onProviderSelected = onProviderSelected
             )
         }
 
@@ -127,58 +170,6 @@ fun HomeScreen(
             }
         }
 
-        if (uiState.providerContents.isNotEmpty()) {
-            for (providerContent in uiState.providerContents) {
-                if (providerContent.trending.isNotEmpty()) {
-                    item {
-                        SectionHeader("${providerContent.provider.displayName} - Trending")
-                    }
-                    item {
-                        ContentRow(
-                            contents = providerContent.trending,
-                            onContentClick = onContentClick
-                        )
-                    }
-                }
-
-                if (providerContent.latest.isNotEmpty()) {
-                    item {
-                        SectionHeader("${providerContent.provider.displayName} - Latest")
-                    }
-                    item {
-                        ContentRow(
-                            contents = providerContent.latest,
-                            onContentClick = onContentClick
-                        )
-                    }
-                }
-            }
-        } else {
-            if (uiState.trending.isNotEmpty()) {
-                item {
-                    SectionHeader("Trending")
-                }
-                item {
-                    ContentRow(
-                        contents = uiState.trending,
-                        onContentClick = onContentClick
-                    )
-                }
-            }
-
-            if (uiState.latest.isNotEmpty()) {
-                item {
-                    SectionHeader("Latest")
-                }
-                item {
-                    ContentRow(
-                        contents = uiState.latest,
-                        onContentClick = onContentClick
-                    )
-                }
-            }
-        }
-
         if (uiState.continueWatching.isNotEmpty()) {
             item {
                 SectionHeader("Continue Watching")
@@ -186,6 +177,30 @@ fun HomeScreen(
             item {
                 ContinueWatchingRow(
                     items = uiState.continueWatching,
+                    onContentClick = onContentClick
+                )
+            }
+        }
+
+        if (uiState.trending.isNotEmpty()) {
+            item {
+                SectionHeader("Trending Now")
+            }
+            item {
+                ContentRow(
+                    contents = uiState.trending,
+                    onContentClick = onContentClick
+                )
+            }
+        }
+
+        if (uiState.latest.isNotEmpty()) {
+            item {
+                SectionHeader("Latest Episodes")
+            }
+            item {
+                ContentRow(
+                    contents = uiState.latest,
                     onContentClick = onContentClick
                 )
             }
@@ -208,7 +223,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun ProviderSelector(
+private fun TopBar(
     currentProvider: ProviderType,
     onProviderSelected: (ProviderType) -> Unit
 ) {
@@ -217,6 +232,7 @@ private fun ProviderSelector(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(Color.Black)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -224,7 +240,7 @@ private fun ProviderSelector(
         Text(
             text = "ProFlix",
             style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.primary,
+            color = Color.Red,
             fontWeight = FontWeight.Bold
         )
 
@@ -241,7 +257,7 @@ private fun ProviderSelector(
             Icon(
                 imageVector = Icons.Default.ArrowDropDown,
                 contentDescription = "Switch provider",
-                tint = MaterialTheme.colorScheme.primary
+                tint = Color.White
             )
         }
 
@@ -255,8 +271,8 @@ private fun ProviderSelector(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (type == currentProvider) {
                                 Text(
-                                    text = "● ",
-                                    color = MaterialTheme.colorScheme.primary
+                                    text = "\u25CF ",
+                                    color = Color.Red
                                 )
                             }
                             Text(
@@ -283,7 +299,7 @@ private fun HeroBanner(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(400.dp)
+            .height(480.dp)
             .clickable(onClick = onClick)
     ) {
         AsyncImage(
@@ -302,9 +318,13 @@ private fun HeroBanner(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
+                            Color.Black.copy(alpha = 0.4f),
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.8f)
-                        )
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.95f)
+                        ),
+                        startY = 0f,
+                        endY = Float.POSITIVE_INFINITY
                     )
                 )
         )
@@ -314,37 +334,70 @@ private fun HeroBanner(
                 .align(Alignment.BottomStart)
                 .padding(16.dp)
         ) {
+            if (content.genres.isNotEmpty()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    content.genres.take(3).forEach { genre ->
+                        Text(
+                            text = genre,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.8f)
+                        )
+                        if (genre != content.genres.take(3).last()) {
+                            Text(
+                                text = "\u00B7",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+            }
+
             Text(
                 text = content.title,
-                style = MaterialTheme.typography.headlineLarge,
+                style = MaterialTheme.typography.headlineMedium,
                 color = Color.White,
+                fontWeight = FontWeight.Bold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
 
-            Spacer(modifier = Modifier.height(4.dp))
+            if (content.description.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = content.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.7f),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
 
-            Text(
-                text = content.genres.joinToString(" | "),
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.Gray
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Row(
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Play",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
+                HeroButton(
                     text = "Play",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
+                    icon = Icons.Default.PlayArrow,
+                    primary = true,
+                    onClick = onClick
+                )
+                HeroButton(
+                    text = "My List",
+                    icon = Icons.Default.Add,
+                    primary = false,
+                    onClick = { }
+                )
+                HeroButton(
+                    text = "Info",
+                    icon = Icons.Default.Info,
+                    primary = false,
+                    onClick = onClick
                 )
             }
         }
@@ -352,12 +405,46 @@ private fun HeroBanner(
 }
 
 @Composable
+private fun HeroButton(
+    text: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    primary: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(
+                if (primary) Color.White else Color.White.copy(alpha = 0.2f)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = text,
+            tint = if (primary) Color.Black else Color.White,
+            modifier = Modifier.height(18.dp)
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (primary) Color.Black else Color.White,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
 private fun SectionHeader(title: String) {
     Text(
         text = title,
-        style = MaterialTheme.typography.titleLarge,
+        style = MaterialTheme.typography.titleMedium,
         color = Color.White,
-        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp)
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 8.dp)
     )
 }
 
@@ -384,33 +471,49 @@ private fun ContentCard(
     content: Content,
     onClick: () -> Unit
 ) {
-    Card(
+    Column(
         modifier = Modifier
-            .width(140.dp)
-            .height(200.dp)
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color.Transparent
-        )
+            .width(130.dp)
+            .clickable(onClick = onClick)
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(content.poster)
-                .crossfade(true)
-                .build(),
-            contentDescription = content.title,
+        Card(
             modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(8.dp)),
-            contentScale = ContentScale.Crop
+                .fillMaxWidth()
+                .height(190.dp),
+            shape = RoundedCornerShape(6.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF1A1A1A)
+            )
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(content.poster)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = content.title,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(6.dp)),
+                contentScale = ContentScale.Crop
+            )
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = content.title,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = MaterialTheme.typography.bodySmall.lineHeight
         )
     }
 }
 
 @Composable
 private fun ContinueWatchingRow(
-    items: List<com.proflix.provider.domain.model.ContinueWatchingItem>,
+    items: List<ContinueWatchingItem>,
     onContentClick: (String) -> Unit
 ) {
     LazyRow(
@@ -428,58 +531,68 @@ private fun ContinueWatchingRow(
 
 @Composable
 private fun ContinueWatchingCard(
-    item: com.proflix.provider.domain.model.ContinueWatchingItem,
+    item: ContinueWatchingItem,
     onClick: () -> Unit
 ) {
-    Card(
+    Column(
         modifier = Modifier
             .width(200.dp)
-            .height(120.dp)
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        )
+            .clickable(onClick = onClick)
     ) {
-        Column {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(item.episode.thumbnail)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = item.episode.title,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(80.dp)
-                    .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)),
-                contentScale = ContentScale.Crop
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(112.dp),
+            shape = RoundedCornerShape(6.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF1A1A1A)
             )
-
-            Column(modifier = Modifier.padding(8.dp)) {
-                Text(
-                    text = item.content.title,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+        ) {
+            Box {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(item.episode.thumbnail)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = item.episode.title,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Crop
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(3.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(Color.Gray.copy(alpha = 0.3f))
+                        .align(Alignment.BottomCenter)
+                        .background(Color.Black.copy(alpha = 0.6f))
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(fraction = item.progress)
                             .fillMaxSize()
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(MaterialTheme.colorScheme.primary)
+                            .background(Color.Red)
                     )
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = item.content.title,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = item.episode.title,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.Gray,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }

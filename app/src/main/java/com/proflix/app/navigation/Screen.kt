@@ -17,7 +17,7 @@ sealed class Screen(val route: String) {
     data object Detail : Screen("detail/{contentId}") {
         fun createRoute(contentId: String) = "detail/${java.net.URLEncoder.encode(contentId, "UTF-8")}"
     }
-    data object Player : Screen("player?videoUrl={videoUrl}&title={title}")
+    data object Player : Screen("player?episodeId={episodeId}&title={title}&contentId={contentId}")
 }
 
 data class BottomNavItem(

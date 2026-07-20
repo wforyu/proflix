@@ -8,7 +8,13 @@ import javax.inject.Inject
 
 class CacheInterceptor @Inject constructor() : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
-        val response = chain.proceed(chain.request())
+        val request = chain.request()
+        val response = chain.proceed(request)
+
+        if (request.method != "GET") return response
+
+        val serverCacheControl = response.header("Cache-Control")
+        if (serverCacheControl != null && serverCacheControl.contains("no-store")) return response
 
         val cacheControl = CacheControl.Builder()
             .maxAge(10, TimeUnit.MINUTES)

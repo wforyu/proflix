@@ -8,7 +8,8 @@ import okhttp3.Request
 import org.jsoup.Jsoup
 
 class SamehadakuStreamExtractor(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val embedVideoExtractor: EmbedVideoExtractor
 ) {
     companion object {
         private const val TAG = "SamehadakuStreamExtractor"
@@ -130,9 +131,8 @@ class SamehadakuStreamExtractor(
     }
 
     private suspend fun resolveBlogger(bloggerUrl: String, quality: String): VideoResult? {
-        val extractor = EmbedVideoExtractor(okHttpClient)
         return try {
-            val result = extractor.extract(bloggerUrl)
+            val result = embedVideoExtractor.extract(bloggerUrl)
             if (result != null) {
                 VideoResult(result.url, quality, result.format.extension)
             } else {
@@ -193,7 +193,8 @@ class SamehadakuStreamExtractor(
             url.startsWith("http") -> url
             url.startsWith("//") -> "https:$url"
             url.startsWith("/") -> {
-                val base = baseUrl.substringBefore("/", "https://")
+                val baseRegex = Regex("^(https?://[^/]+)")
+                val base = baseRegex.find(baseUrl)?.groupValues?.get(1) ?: "https://"
                 "$base$url"
             }
             else -> url
@@ -210,6 +211,6 @@ class SamehadakuStreamExtractor(
             .build()
 
         val response = okHttpClient.newCall(request).execute()
-        return response.body?.string() ?: throw Exception("Empty response")
+        return response.use { it.body?.string() ?: throw Exception("Empty response") }
     }
 }

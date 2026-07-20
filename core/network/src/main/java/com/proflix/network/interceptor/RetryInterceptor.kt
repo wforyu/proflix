@@ -10,9 +10,11 @@ class RetryInterceptor @Inject constructor() : Interceptor {
         var response = chain.proceed(request)
         var retryCount = 0
 
-        while (!response.isSuccessful && retryCount < 3) {
+        while (response.code >= 500 && retryCount < 2) {
             retryCount++
-            response.close()
+            try {
+                response.close()
+            } catch (_: Exception) {}
             response = chain.proceed(request)
         }
 

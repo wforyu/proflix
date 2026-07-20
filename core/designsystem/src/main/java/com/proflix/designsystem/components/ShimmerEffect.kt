@@ -15,7 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
-import com.proflix.designsystem.theme.DarkSurfaceVariant
+import androidx.compose.material3.MaterialTheme
 
 fun Modifier.shimmerEffect(): Modifier = composed {
     val transition = rememberInfiniteTransition(label = "shimmer")
@@ -29,12 +29,14 @@ fun Modifier.shimmerEffect(): Modifier = composed {
         label = "shimmer_translate"
     )
 
+    val shimmerColor = MaterialTheme.colorScheme.surfaceVariant
+
     val shimmerBrush = remember(translateAnim) {
         Brush.linearGradient(
             colors = listOf(
-                DarkSurfaceVariant.copy(alpha = 0.6f),
-                DarkSurfaceVariant.copy(alpha = 0.2f),
-                DarkSurfaceVariant.copy(alpha = 0.6f)
+                shimmerColor.copy(alpha = 0.6f),
+                shimmerColor.copy(alpha = 0.2f),
+                shimmerColor.copy(alpha = 0.6f)
             ),
             start = Offset(translateAnim - 200f, translateAnim - 200f),
             end = Offset(translateAnim, translateAnim)

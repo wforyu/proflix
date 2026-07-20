@@ -39,6 +39,11 @@ class SearchViewModel @Inject constructor(
             searchJob = viewModelScope.launch {
                 delay(300)
                 search(query)
+                if (query.isNotBlank() && !_uiState.value.recentSearches.contains(query)) {
+                    _uiState.value = _uiState.value.copy(
+                        recentSearches = listOf(query) + _uiState.value.recentSearches.take(9)
+                    )
+                }
             }
         } else {
             _uiState.value = _uiState.value.copy(results = emptyList(), isLoading = false)

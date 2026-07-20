@@ -268,7 +268,7 @@ Aplikasi tidak boleh bergantung pada satu backend saja.
 | Provider | Tipe | Metode Scraping | URL Default |
 |---|---|---|---|
 | Anoboy | Anime Indonesia | Jsoup HTML parsing | https://anoboy.pk |
-| Samehadaku | Anime Indonesia | SOKUJA Next.js RSC + API | https://x6.sokuja.uk |
+| Samehadaku | Anime Indonesia | WordPress + AJAX player | https://v2.samehadaku.how |
 | Oploverz | Anime Indonesia | SvelteKit SSR JSON extraction | https://oploverz.site |
 
 ### Interface Provider
@@ -317,13 +317,13 @@ interface Provider {
 
 ## Samehadaku
 
-- **URL**: `x6.sokuja.uk` (sebelumnya `v2.samehadaku.how`)
-- **Tipe**: Next.js SPA (SOKUJA) dengan React Server Components
-- **Home**: Sidebar "Anime Populer" dari static HTML (`aside ul li a[href*="/anime/"]`). Hidden `<div id="S:0">` berisi hero carousel. Main content di-load via RSC streaming
-- **Detail**: LD+JSON structured data (`TVSeries` schema) dengan `name`, `description`, `genre[]`, `aggregateRating`. Episode grid dari HTML
-- **Episodes**: Parse `<a href*="-episode-" href*="-subtitle-indonesia">` dari halaman detail. Episode URL pattern: `/{slug}-episode-{N}-subtitle-indonesia/`
-- **Streams**: API endpoint `/api/video-mirrors?e={episodeId}` → direct MP4 URLs. `episodeId` numerik di-extract dari RSC data (`"episodeId":{number}`)
-- **Search**: Query ke `/?s={query}`, parsing result links dari static HTML
+- **URL**: `v2.samehadaku.how`
+- **Tipe**: WordPress + Anime Stream Theme
+- **Home**: `div.post-show ul li` untuk latest episodes
+- **Detail**: `h1.headpost`, `.mta a[href*="/genre/"]`, `.score`, `.entry-content .ttls`
+- **Episodes**: `div.lstepsiode.listeps ul li` / `div.listeps ul li`, link di `div.epsleft span.lchx a`
+- **Streams**: Server tabs via `#server .east_player_option`, AJAX POST ke `/wp-admin/admin-ajax.php` dengan `action=player_ajax`. Fallback iframe parsing
+- **Search**: `/?s={query}`, parsing `article.animpost`
 
 ## Oploverz
 
@@ -512,20 +512,19 @@ val epTitle = ep.selectFirst("h3")?.text()?.ifBlank { ... } ?: "fallback"
 
 **File**: `feature/player/PlayerNavigation.kt`, `app/navigation/ProFlixNavHost.kt`, `feature/player/StreamPlayerViewModel.kt`
 
-## 7. SamehadakuProvider Migration ke SOKUJA
+## 7. SamehadakuProvider — WordPress AJAX Player
 
-**Masalah**: Samehadaku lama (`v2.samehadaku.how`) sudah tidak berfungsi. Migrasi ke SOKUJA (`x6.sokuja.uk`) yang menggunakan Next.js RSC.
+**Masalah**: Samehadaku menggunakan WordPress dengan player AJAX-based.
 
-**Fix**:
-- Rewrite lengkap `SamehadakuProvider.kt` menggunakan arsitektur SOKUJA
-- Sidebar "Anime Populer" di-parse dari static HTML (`aside ul li a[href*="/anime/"]`)
-- Detail anime dari LD+JSON structured data (`TVSeries` schema)
-- Episodes di-parse dari daftar episode di halaman detail (`a[href*="-episode-"]`)
-- Streams menggunakan API endpoint SOKUJA: `/api/video-mirrors?e={episodeId}` → direct MP4 URLs
-- Search menggunakan `/?s={query}` dengan parsing HTML
-- `ProviderManager.kt` default domain di-update ke `https://x6.sokuja.uk`
+**Implementasi**:
+- `SamehadakuProvider.kt` menggunakan Jsoup HTML parsing
+- Home: `div.post-show ul li` untuk episode terbaru
+- Detail: `h1.headpost`, genre dari `.mta a[href*="/genre/"]`
+- Episodes: `div.lstepsiode.listeps ul li` dengan link di `div.epsleft span.lchx a`
+- Streams: Server tabs via `#server .east_player_option`, AJAX POST ke `/wp-admin/admin-ajax.php` dengan `action=player_ajax`
+- Fallback: iframe parsing dari episode page
 
-**File**: `provider/data/SamehadakuProvider.kt`, `provider/data/ProviderManager.kt`
+**File**: `provider/data/SamehadakuProvider.kt`, `provider/data/SamehadakuStreamExtractor.kt`, `provider/data/ProviderManager.kt`
 
 ## 8. Oploverz 1000+ Episode Tidak Muncul
 
@@ -833,12 +832,12 @@ Untuk SETIAP provider (Samehadaku, Oploverz, Anoboy), lakukan langkah ini:
 
 ## Detail Per Provider
 
-### Samehadaku (x6.sokuja.uk)
-- **Tipe**: Next.js SPA (SOKUJA) + React Server Components
-- **Embed**: API endpoint `/api/video-mirrors?e={episodeId}` → direct MP4
-- **Extractor**: API-based (bukan iframe scraping)
-- **Catatan**: Episode ID numerik di-extract dari RSC data
-- **Status**: Perlu audit ulang home layout + episode matching
+### Samehadaku (v2.samehadaku.how)
+- **Tipe**: WordPress + Anime Stream Theme
+- **Embed**: AJAX POST `/wp-admin/admin-ajax.php` → iframe → resolve per host
+- **Extractor**: Server tabs + iframe fallback (sama seperti Anoboy)
+- **Catatan**: Menggunakan `player_ajax` action dengan `data-post` dan `data-nume`
+- **Status**: Aktif dan berfungsi
 
 ### Oploverz (oploverz.site)
 - **Tipe**: SvelteKit SPA + SSR data

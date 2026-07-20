@@ -7,9 +7,11 @@ import com.proflix.provider.domain.ProviderRepository
 import com.proflix.provider.domain.model.Episode
 import com.proflix.provider.domain.model.StreamSource
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -34,6 +36,8 @@ class StreamPlayerViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
+    private var resolveJob: Job? = null
+
     fun resolveStream(episodeId: String, title: String, contentId: String = "") {
         if (episodeId.isBlank()) {
             _uiState.value = PlayerUiState(
@@ -44,7 +48,8 @@ class StreamPlayerViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch {
+        resolveJob?.cancel()
+        resolveJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
                 title = title,
@@ -64,12 +69,9 @@ class StreamPlayerViewModel @Inject constructor(
                     )
                 }
                 is Result.Error -> {
-                    val fallbackUrl = providerRepository.getDefaultDomain(
-                        providerRepository.getCurrentProviderType()
-                    ) + "/$episodeId"
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        streamUrl = fallbackUrl,
+                        streamUrl = "",
                         error = result.message
                     )
                 }
@@ -92,7 +94,11 @@ class StreamPlayerViewModel @Inject constructor(
                     currentEpisodeIndex = currentIndex
                 )
             }
-            is Result.Error -> {}
+            is Result.Error -> {
+                _uiState.value = _uiState.value.copy(
+                    error = _uiState.value.error ?: "Failed to load episodes"
+                )
+            }
             is Result.Loading -> {}
         }
     }
@@ -106,6 +112,7 @@ class StreamPlayerViewModel @Inject constructor(
     }
 
     fun onPlaybackEnded() {
+        if (_uiState.value.playbackEnded) return
         _uiState.value = _uiState.value.copy(playbackEnded = true)
         if (_uiState.value.autoPlayNext) {
             playNextEpisode()
@@ -119,34 +126,40 @@ class StreamPlayerViewModel @Inject constructor(
         if (currentIndex < 0 || currentIndex >= episodes.size - 1) return
 
         val nextEp = episodes[currentIndex + 1]
-        viewModelScope.launch {
-            _uiState.value = state.copy(
-                isLoading = true,
-                title = nextEp.title,
-                streamUrl = "",
-                streamSources = emptyList(),
-                selectedSourceIndex = 0,
-                currentEpisodeIndex = currentIndex + 1,
-                playbackEnded = false,
-                error = null
-            )
+        resolveJob?.cancel()
+        resolveJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isLoading = true,
+                    title = nextEp.title,
+                    streamSources = emptyList(),
+                    selectedSourceIndex = 0,
+                    currentEpisodeIndex = currentIndex + 1,
+                    playbackEnded = false,
+                    error = null
+                )
+            }
 
             when (val result = providerRepository.getStream(nextEp.id)) {
                 is Result.Success -> {
                     val sources = result.data
                     val firstUrl = sources.firstOrNull()?.url ?: ""
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        streamUrl = firstUrl,
-                        streamSources = sources,
-                        selectedSourceIndex = 0
-                    )
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            streamUrl = firstUrl,
+                            streamSources = sources,
+                            selectedSourceIndex = 0
+                        )
+                    }
                 }
                 is Result.Error -> {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        error = result.message
-                    )
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = result.message
+                        )
+                    }
                 }
                 is Result.Loading -> {}
             }
@@ -160,34 +173,40 @@ class StreamPlayerViewModel @Inject constructor(
         if (currentIndex <= 0) return
 
         val prevEp = episodes[currentIndex - 1]
-        viewModelScope.launch {
-            _uiState.value = state.copy(
-                isLoading = true,
-                title = prevEp.title,
-                streamUrl = "",
-                streamSources = emptyList(),
-                selectedSourceIndex = 0,
-                currentEpisodeIndex = currentIndex - 1,
-                playbackEnded = false,
-                error = null
-            )
+        resolveJob?.cancel()
+        resolveJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isLoading = true,
+                    title = prevEp.title,
+                    streamSources = emptyList(),
+                    selectedSourceIndex = 0,
+                    currentEpisodeIndex = currentIndex - 1,
+                    playbackEnded = false,
+                    error = null
+                )
+            }
 
             when (val result = providerRepository.getStream(prevEp.id)) {
                 is Result.Success -> {
                     val sources = result.data
                     val firstUrl = sources.firstOrNull()?.url ?: ""
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        streamUrl = firstUrl,
-                        streamSources = sources,
-                        selectedSourceIndex = 0
-                    )
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            streamUrl = firstUrl,
+                            streamSources = sources,
+                            selectedSourceIndex = 0
+                        )
+                    }
                 }
                 is Result.Error -> {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        error = result.message
-                    )
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = result.message
+                        )
+                    }
                 }
                 is Result.Loading -> {}
             }
@@ -195,9 +214,7 @@ class StreamPlayerViewModel @Inject constructor(
     }
 
     fun toggleAutoPlayNext() {
-        _uiState.value = _uiState.value.copy(
-            autoPlayNext = !_uiState.value.autoPlayNext
-        )
+        _uiState.update { it.copy(autoPlayNext = !it.autoPlayNext) }
     }
 
     fun hasNextEpisode(): Boolean {

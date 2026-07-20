@@ -19,14 +19,18 @@ import javax.inject.Singleton
 
 @Singleton
 class AnoboyProvider @Inject constructor(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val embedVideoExtractor: EmbedVideoExtractor
 ) : Provider {
 
-    private val streamExtractor = AnoboyStreamExtractor(okHttpClient)
+    private val streamExtractor = AnoboyStreamExtractor(okHttpClient, embedVideoExtractor)
 
     companion object {
-        var BASE_URL = "https://anoboy.pk"
+        @Volatile var BASE_URL = "https://anoboy.pk"
         private const val TAG = "AnoboyProvider"
+        private val EPISODE_NUM_REGEX = Regex("Episode\\s*(\\d+)")
+        private val EP_DOT_NUM_REGEX = Regex("Ep\\.?\\s*(\\d+)")
+        private val TO_ANIME_ID_REGEX = Regex("^(.+)-episode-\\d+")
     }
 
     override suspend fun getHome(): Result<HomeContent> = withContext(Dispatchers.IO) {
@@ -131,8 +135,8 @@ class AnoboyProvider @Inject constructor(
                 }
                 val epInfo = ep.selectFirst(".epl-date, .playinfo span, span")?.text() ?: ""
                 val epNum = eplNum
-                    ?: Regex("Episode\\s*(\\d+)").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
-                    ?: Regex("Ep\\.?\\s*(\\d+)").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: EPISODE_NUM_REGEX.find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: EP_DOT_NUM_REGEX.find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
                     ?: (episodes.size + 1)
 
                 val epId = epUrl.removePrefix(BASE_URL).trimStart('/')
@@ -217,7 +221,7 @@ class AnoboyProvider @Inject constructor(
 
     override suspend fun search(query: String): Result<List<Content>> = withContext(Dispatchers.IO) {
         safeCall {
-            val doc = fetchDocument("$BASE_URL/?s=$query")
+            val doc = fetchDocument("$BASE_URL/?s=${java.net.URLEncoder.encode(query, "UTF-8")}")
             val results = mutableListOf<Content>()
 
             doc.select("article.bs").forEach { element ->
@@ -255,19 +259,33 @@ class AnoboyProvider @Inject constructor(
     private fun fetchDocument(url: String): org.jsoup.nodes.Document {
         val request = Request.Builder()
             .url(url)
-            .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+            .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+            .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
             .addHeader("Accept-Language", "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7")
+            .addHeader("Accept-Encoding", "gzip, deflate, br")
+            .addHeader("Sec-Ch-Ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\"")
+            .addHeader("Sec-Ch-Ua-Mobile", "?0")
+            .addHeader("Sec-Ch-Ua-Platform", "\"Windows\"")
+            .addHeader("Sec-Fetch-Dest", "document")
+            .addHeader("Sec-Fetch-Mode", "navigate")
+            .addHeader("Sec-Fetch-Site", "none")
+            .addHeader("Sec-Fetch-User", "?1")
+            .addHeader("Upgrade-Insecure-Requests", "1")
             .build()
 
         val response = okHttpClient.newCall(request).execute()
-        val body = response.body?.string() ?: throw Exception("Empty response")
-        return org.jsoup.Jsoup.parse(body, url)
+        response.use {
+            if (!it.isSuccessful) {
+                throw Exception("HTTP ${it.code} from $url")
+            }
+            val body = it.body?.string() ?: throw Exception("Empty response from $url")
+            return org.jsoup.Jsoup.parse(body, url)
+        }
     }
 
     private fun toAnimeId(id: String): String {
         if (id.startsWith("anime/")) return id
-        val match = Regex("^(.+)-episode-\\d+").find(id)
+        val match = TO_ANIME_ID_REGEX.find(id)
         if (match != null) {
             return "anime/${match.groupValues[1]}"
         }
@@ -277,12 +295,12 @@ class AnoboyProvider @Inject constructor(
     private fun parseTrending(doc: org.jsoup.nodes.Document): List<Content> {
         val contents = mutableListOf<Content>()
 
-        doc.select("aside#sidebar li a[href*=\"/anime/\"]").forEach { a ->
-            val title = a.text().trim()
+        doc.select(".serieslist.pop.wpop li a[href*=\"/anime/\"]").forEach { a ->
+            val title = a.selectFirst(".tt h2, h2, .jdl")?.text()?.trim()
+                ?: a.text().trim()
             val href = a.attr("href") ?: ""
             val id = href.removePrefix(BASE_URL).trimStart('/')
-            val poster = a.selectFirst("img")
-                ?.let { it.attr("abs:data-src").ifBlank { it.attr("abs:src") } } ?: ""
+            val poster = extractImageUrl(a.selectFirst("img"))
 
             if (title.isNotBlank() && id.isNotBlank() && id.startsWith("anime/")) {
                 contents.add(
@@ -311,8 +329,7 @@ class AnoboyProvider @Inject constructor(
             val link = element.selectFirst(".bsx a") ?: element.selectFirst("a")
             val title = element.selectFirst(".tt h2[itemprop=\"headline\"]")?.text()
                 ?: element.selectFirst(".tt")?.text() ?: ""
-            val poster = element.selectFirst(".limit img")
-                ?.let { it.attr("abs:data-src").ifBlank { it.attr("abs:src") } } ?: ""
+            val poster = extractImageUrl(element.selectFirst(".limit img"))
             val href = link?.attr("href") ?: ""
             val rawId = href.removePrefix(BASE_URL).trimStart('/')
             val id = toAnimeId(rawId)
@@ -336,5 +353,19 @@ class AnoboyProvider @Inject constructor(
         }
 
         return contents
+    }
+
+    private fun extractImageUrl(img: org.jsoup.nodes.Element?): String {
+        if (img == null) return ""
+        val dataSrc = img.attr("abs:data-src").trim()
+        if (dataSrc.isNotBlank() && !dataSrc.startsWith("data:")) return dataSrc
+        val src = img.attr("abs:src").trim()
+        if (src.isNotBlank() && !src.startsWith("data:")) return src
+        val srcset = img.attr("srcset").trim()
+        if (srcset.isNotBlank()) {
+            val firstUrl = srcset.split(",").firstOrNull()?.trim()?.split("\\s+".toRegex())?.firstOrNull()
+            if (firstUrl != null && !firstUrl.startsWith("data:")) return firstUrl
+        }
+        return ""
     }
 }

@@ -27,7 +27,7 @@ inline fun <T, R> Result<T>.map(transform: (T) -> R): Result<R> {
 suspend fun <T> safeCall(block: suspend () -> T): Result<T> {
     return try {
         Result.Success(block())
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         Result.Error(e)
     }
 }

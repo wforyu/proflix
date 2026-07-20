@@ -20,7 +20,9 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import javax.inject.Named
 import javax.inject.Singleton
 
 @Module
@@ -43,7 +45,7 @@ object NetworkModule {
         retryInterceptor: RetryInterceptor,
         cache: Cache
     ): OkHttpClient {
-        val cookieStore = mutableMapOf<String, List<Cookie>>()
+        val cookieStore = ConcurrentHashMap<String, List<Cookie>>()
 
         val cookieJar = object : CookieJar {
             override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
@@ -72,12 +74,37 @@ object NetworkModule {
             )
 
         val loggingInterceptor = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = HttpLoggingInterceptor.Level.BASIC
         }
 
         builder.addInterceptor(loggingInterceptor)
 
         return builder.build()
+    }
+
+    @Provides
+    @Singleton
+    @Named("image")
+    fun provideImageOkHttpClient(): OkHttpClient {
+        return OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+                    .addHeader("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                    .addHeader("Accept-Language", "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7")
+                    .addHeader("Accept-Encoding", "gzip, deflate, br")
+                    .addHeader("Connection", "keep-alive")
+                    .addHeader("Sec-Fetch-Dest", "image")
+                    .addHeader("Sec-Fetch-Mode", "no-cors")
+                    .addHeader("Sec-Fetch-Site", "cross-site")
+                    .build()
+                chain.proceed(request)
+            }
+            .build()
     }
 
     @Provides

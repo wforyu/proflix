@@ -3,9 +3,11 @@ package com.proflix.database.entity
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "history")
+@Entity(
+    tableName = "history",
+    primaryKeys = ["contentId", "episodeId"]
+)
 data class HistoryEntity(
-    @PrimaryKey
     val contentId: String,
     val title: String,
     val poster: String,

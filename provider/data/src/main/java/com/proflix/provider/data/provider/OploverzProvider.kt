@@ -21,15 +21,18 @@ import javax.inject.Singleton
 
 @Singleton
 class OploverzProvider @Inject constructor(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val embedVideoExtractor: EmbedVideoExtractor
 ) : Provider {
 
-    private val streamExtractor = OploverzStreamExtractor(okHttpClient)
-
     companion object {
-        var BASE_URL = "https://oploverz.site"
+        @Volatile var BASE_URL = "https://oploverz.site"
         private const val API_BASE = "https://backapi.oploverz.ac/api"
         private const val TAG = "OploverzProvider"
+        private val EPISODE_NUM_REGEX = Regex("/episode/(\\d+)")
+        private val BLOGGER_TOKEN_REGEX = Regex("""token=([^&"'\\s]+)""")
+        private val STREAM_URL_PATTERN = Regex("""(?:streamUrl|stream_url|videoUrl|video_url)\s*[:=]\s*['"]?(https?://[^'";\s]+)['"]?""")
+        private val EMBED_URL_PATTERN = Regex("""['"]?(https?://(?:blogger\.com/video|filedon\.co|upbolt\.to|4meplayer|abyssplayer|turboviplay|etvp\.cc|sptvp\.com|embedwish|sumpiernos|vcdn2\.mystream)[^'"\s<>]*)['"]?""")
     }
 
     override suspend fun getHome(): Result<HomeContent> = withContext(Dispatchers.IO) {
@@ -80,8 +83,6 @@ class OploverzProvider @Inject constructor(
             val seasonObj = data.optJSONObject("season")
             val year = seasonObj?.optString("name", "") ?: ""
 
-            val status = data.optString("status", "")
-
             Content(
                 id = id,
                 title = title,
@@ -104,7 +105,8 @@ class OploverzProvider @Inject constructor(
 
             doc.select("a[href*=\"/episode/\"]").forEach { a ->
                 val href = a.attr("href").trim()
-                val epNum = Regex("/episode/(\\d+)").find(href)?.groupValues?.get(1)?.toIntOrNull()
+                if (!href.contains("/series/$contentId/episode/")) return@forEach
+                val epNum = EPISODE_NUM_REGEX.find(href)?.groupValues?.get(1)?.toIntOrNull()
                     ?: return@forEach
 
                 if (episodes.any { it.number == epNum }) return@forEach
@@ -133,16 +135,18 @@ class OploverzProvider @Inject constructor(
     override suspend fun getStream(episodeId: String): Result<List<StreamSource>> = withContext(Dispatchers.IO) {
         safeCall {
             val sources = mutableListOf<StreamSource>()
-
             val episodeUrl = if (episodeId.startsWith("http")) episodeId else "$BASE_URL/series/$episodeId"
+
+            Log.d(TAG, "Loading streams from: $episodeUrl")
             val html = fetchHtml(episodeUrl)
-            val streamUrls = extractStreamUrlsFromHtml(html)
+            val doc = org.jsoup.Jsoup.parse(html, episodeUrl)
 
-            Log.d(TAG, "Found ${streamUrls.size} stream URLs for $episodeId")
+            val embedUrls = extractEmbedUrlsFromPage(html, doc)
+            Log.d(TAG, "Found ${embedUrls.size} embed URLs")
 
-            for ((rawUrl, quality) in streamUrls) {
+            for ((rawUrl, quality) in embedUrls) {
                 try {
-                    val result = streamExtractor.resolve(rawUrl, quality)
+                    val result = resolveUrl(rawUrl, quality)
                     if (result != null) {
                         sources.add(
                             StreamSource(
@@ -161,13 +165,12 @@ class OploverzProvider @Inject constructor(
             }
 
             if (sources.isEmpty()) {
-                Log.w(TAG, "No streams resolved, trying iframe fallback")
-                val doc = org.jsoup.Jsoup.parse(html, episodeUrl)
+                Log.w(TAG, "No streams resolved from page data, trying iframe fallback")
                 for (iframe in doc.select("iframe[src]")) {
                     val src = iframe.attr("abs:src")
                     if (src.isNotBlank() && !src.contains("about:blank")) {
                         try {
-                            val result = streamExtractor.resolve(src, "default")
+                            val result = resolveUrl(src, "default")
                             if (result != null) {
                                 sources.add(
                                     StreamSource(
@@ -191,62 +194,64 @@ class OploverzProvider @Inject constructor(
             val results = mutableListOf<Content>()
             val seen = mutableSetOf<String>()
 
-            val html = fetchHtml("$BASE_URL/series")
-            val doc = org.jsoup.Jsoup.parse(html, "$BASE_URL/series")
+            try {
+                val json = fetchApiJson("$API_BASE/series?page=1&limit=100&search=${java.net.URLEncoder.encode(query, "UTF-8")}")
+                val dataArr = json?.optJSONArray("data") ?: json?.optJSONObject("data")?.optJSONArray("data")
 
-            for (a in doc.select("a[href^=\"/series/\"]")) {
-                val href = a.attr("href").trim()
-                val slug = href.removePrefix("/series/").trim()
-                if (slug.isBlank() || slug.contains("/") || slug in seen) continue
-                val title = a.text().trim()
-                if (title.isNotBlank() && title.contains(query, ignoreCase = true)) {
-                    seen.add(slug)
-                    results.add(
-                        Content(
-                            id = slug,
-                            title = title,
-                            poster = "",
-                            banner = "",
-                            description = "",
-                            genres = emptyList(),
-                            year = "",
-                            rating = "",
-                            type = ContentType.ANIME
-                        )
-                    )
+                dataArr?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        val slug = item.optString("slug", "")
+                        val title = item.optString("title", "")
+                        val poster = item.optString("poster", "")
+
+                        if (title.isNotBlank() && slug.isNotBlank() && slug !in seen) {
+                            seen.add(slug)
+                            results.add(
+                                Content(
+                                    id = slug,
+                                    title = title,
+                                    poster = poster,
+                                    banner = poster,
+                                    description = "",
+                                    genres = emptyList(),
+                                    year = "",
+                                    rating = "",
+                                    type = ContentType.ANIME
+                                )
+                            )
+                        }
+                    }
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "API search failed: ${e.message}")
             }
 
             if (results.isEmpty()) {
                 try {
-                    val json = fetchApiJson("$API_BASE/series?page=1&limit=50")
-                    val dataArr = json?.optJSONObject("data")?.let { null }
-                        ?: json?.optJSONArray("data")
+                    val html = fetchHtml("$BASE_URL/series?q=${java.net.URLEncoder.encode(query, "UTF-8")}")
+                    val doc = org.jsoup.Jsoup.parse(html, "$BASE_URL/series")
 
-                    dataArr?.let { arr ->
-                        for (i in 0 until arr.length()) {
-                            val item = arr.optJSONObject(i) ?: continue
-                            val slug = item.optString("slug", "")
-                            val title = item.optString("title", "")
-                            val poster = item.optString("poster", "")
-
-                            if (title.isNotBlank() && slug.isNotBlank() && slug !in seen
-                                && title.contains(query, ignoreCase = true)) {
-                                seen.add(slug)
-                                results.add(
-                                    Content(
-                                        id = slug,
-                                        title = title,
-                                        poster = poster,
-                                        banner = poster,
-                                        description = "",
-                                        genres = emptyList(),
-                                        year = "",
-                                        rating = "",
-                                        type = ContentType.ANIME
-                                    )
+                    for (a in doc.select("a[href^=\"/series/\"]")) {
+                        val href = a.attr("href").trim()
+                        val slug = href.removePrefix("/series/").trim()
+                        if (slug.isBlank() || slug.contains("/") || slug in seen) continue
+                        val title = a.text().trim()
+                        if (title.isNotBlank() && title.contains(query, ignoreCase = true) || slug.contains(query, ignoreCase = true)) {
+                            seen.add(slug)
+                            results.add(
+                                Content(
+                                    id = slug,
+                                    title = title,
+                                    poster = "",
+                                    banner = "",
+                                    description = "",
+                                    genres = emptyList(),
+                                    year = "",
+                                    rating = "",
+                                    type = ContentType.ANIME
                                 )
-                            }
+                            )
                         }
                     }
                 } catch (_: Exception) {}
@@ -257,6 +262,100 @@ class OploverzProvider @Inject constructor(
     }
 
     override suspend fun getProviderName(): String = "Oploverz"
+
+    private suspend fun resolveUrl(rawUrl: String, quality: String): StreamSource? {
+        if (EmbedVideoExtractor.isDirectVideoUrl(rawUrl)) {
+            val fmt = EmbedVideoExtractor.detectFormat(rawUrl)
+            return StreamSource(url = rawUrl, quality = quality, format = fmt.extension)
+        }
+
+        try {
+            val result = embedVideoExtractor.extract(rawUrl)
+            if (result != null) {
+                return StreamSource(url = result.url, quality = quality, format = result.format.extension)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "embedVideoExtractor failed for $rawUrl: ${e.message}")
+        }
+
+        try {
+            val html = fetchHtml(rawUrl)
+            val doc = org.jsoup.Jsoup.parse(html, rawUrl)
+            for (iframe in doc.select("iframe[src]")) {
+                val src = iframe.attr("abs:src")
+                if (src.isNotBlank() && !src.contains("about:blank")) {
+                    if (EmbedVideoExtractor.isDirectVideoUrl(src)) {
+                        val fmt = EmbedVideoExtractor.detectFormat(src)
+                        return StreamSource(url = src, quality = quality, format = fmt.extension)
+                    }
+                    val inner = embedVideoExtractor.extract(src)
+                    if (inner != null) {
+                        return StreamSource(url = inner.url, quality = quality, format = inner.format.extension)
+                    }
+                }
+            }
+
+            val directUrl = extractDirectVideoFromHtml(html)
+            if (directUrl != null) {
+                val fmt = EmbedVideoExtractor.detectFormat(directUrl)
+                return StreamSource(url = directUrl, quality = quality, format = fmt.extension)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Fallback resolution failed for $rawUrl: ${e.message}")
+        }
+
+        return null
+    }
+
+    private fun extractDirectVideoFromHtml(html: String): String? {
+        val patterns = listOf(
+            Regex("""(?:file|source|src|videoUrl|url)\s*[:=]\s*['"]?(https?://[^'";\s]+\.(?:mp4|m3u8|mpd)(?:\?[^'"'\s]*)?)['"]?"""),
+            Regex("""['"](?:file|source|src|videoUrl|url)['"]\s*:\s*['"]?(https?://[^'";\s]+\.(?:mp4|m3u8|mpd)(?:\?[^'"'\s]*)?)['"]?"""),
+            Regex("""['"]?sources['"]?\s*:\s*\[\s*\{[^}]*['"]?file['"]?\s*:\s*['"]?(https?://[^'";\s]+)['"]?"""),
+        )
+        for (pattern in patterns) {
+            val match = pattern.find(html) ?: continue
+            val url = match.groupValues.getOrNull(1)?.trim() ?: continue
+            if (url.isNotBlank() && url.startsWith("http")) return url
+        }
+        return null
+    }
+
+    private fun extractEmbedUrlsFromPage(html: String, doc: org.jsoup.nodes.Document): List<Pair<String, String>> {
+        val results = mutableListOf<Pair<String, String>>()
+        val seen = mutableSetOf<String>()
+
+        for (match in EMBED_URL_PATTERN.findAll(html)) {
+            var url = match.groupValues[1].trim()
+            url = url.replace("\\u003d", "=").replace("\\u0026", "&").replace("\\/", "/")
+            url = url.trimEnd(',', ';', ')', ']', '"', '\'')
+            if (url.isNotBlank() && url !in seen && url.startsWith("http")) {
+                seen.add(url)
+                val quality = if (url.contains("blogger.com")) "Blogger" else "embed"
+                results.add(url to quality)
+            }
+        }
+
+        for (match in STREAM_URL_PATTERN.findAll(html)) {
+            var url = match.groupValues[1].trim()
+            url = url.replace("\\u003d", "=").replace("\\u0026", "&").replace("\\/", "/")
+            url = url.trimEnd(',', ';', ')', ']', '"', '\'')
+            if (url.isNotBlank() && url !in seen && url.startsWith("http")) {
+                seen.add(url)
+                results.add(url to "default")
+            }
+        }
+
+        for (iframe in doc.select("iframe[src]")) {
+            val src = iframe.attr("abs:src")
+            if (src.isNotBlank() && !src.contains("about:blank") && src !in seen) {
+                seen.add(src)
+                results.add(src to "iframe")
+            }
+        }
+
+        return results
+    }
 
     private fun fetchTrending(): List<Content> {
         val contents = mutableListOf<Content>()
@@ -337,64 +436,25 @@ class OploverzProvider @Inject constructor(
         return contents
     }
 
-    private fun extractStreamUrlsFromHtml(html: String): List<Pair<String, String>> {
-        val results = mutableListOf<Pair<String, String>>()
-
-        val streamUrlPattern = Regex(
-            """streamUrl\s*:\s*\[(.*?)\]""",
-            RegexOption.DOT_MATCHES_ALL
-        )
-        streamUrlPattern.find(html)?.let { match ->
-            val arrayContent = match.groupValues[1]
-            val entryPattern = Regex(
-                """\{\s*source\s*:\s*"([^"]*)"\s*,\s*url\s*:\s*"([^"]*)"\s*\}"""
-            )
-            for (entryMatch in entryPattern.findAll(arrayContent)) {
-                val source = entryMatch.groupValues[1]
-                val url = entryMatch.groupValues[2]
-                if (url.isNotBlank()) {
-                    results.add(url to source)
-                }
-            }
-        }
-
-        if (results.isEmpty()) {
-            val altPattern = Regex(
-                """"streamUrl"\s*:\s*\[(.*?)\]""",
-                RegexOption.DOT_MATCHES_ALL
-            )
-            altPattern.find(html)?.let { match ->
-                val arrayContent = match.groupValues[1]
-                val entryPattern = Regex(
-                    """\{\s*"source"\s*:\s*"([^"]*)"\s*,\s*"url"\s*:\s*"([^"]*)"\s*\}"""
-                )
-                for (entryMatch in entryPattern.findAll(arrayContent)) {
-                    val source = entryMatch.groupValues[1]
-                    val url = entryMatch.groupValues[2]
-                    if (url.isNotBlank()) {
-                        results.add(url to source)
-                    }
-                }
-            }
-        }
-
-        return results
-    }
-
     private fun fetchApiJson(endpoint: String): JSONObject? {
         return try {
             val request = Request.Builder()
                 .url(endpoint)
-                .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
                 .addHeader("Accept", "application/json")
                 .addHeader("Referer", "$BASE_URL/")
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
-            val body = response.body?.string() ?: return null
-            response.close()
+        val response = okHttpClient.newCall(request).execute()
+        val body = response.use {
+            if (!it.isSuccessful) {
+                Log.w(TAG, "fetchApiJson HTTP ${it.code} from $endpoint")
+                return null
+            }
+            it.body?.string()
+        } ?: return null
 
-            if (body.isBlank()) return null
+        if (body.isBlank()) return null
             JSONObject(body)
         } catch (e: Exception) {
             Log.w(TAG, "fetchApiJson failed for $endpoint: ${e.message}")
@@ -405,14 +465,21 @@ class OploverzProvider @Inject constructor(
     private fun fetchHtml(url: String): String {
         val request = Request.Builder()
             .url(url)
-            .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+            .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
             .addHeader("Accept-Language", "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7")
+            .addHeader("Sec-Fetch-Dest", "document")
+            .addHeader("Sec-Fetch-Mode", "navigate")
+            .addHeader("Sec-Fetch-Site", "none")
+            .addHeader("Upgrade-Insecure-Requests", "1")
             .build()
 
         val response = okHttpClient.newCall(request).execute()
-        val body = response.body?.string() ?: throw Exception("Empty response")
-        response.close()
-        return body
+        response.use {
+            if (!it.isSuccessful) {
+                throw Exception("HTTP ${it.code} from $url")
+            }
+            return it.body?.string() ?: throw Exception("Empty response from $url")
+        }
     }
 }

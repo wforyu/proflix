@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -63,6 +64,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
@@ -95,32 +99,40 @@ fun StreamPlayerScreen(
 
     fun toggleFullscreen() {
         isFullscreen = !isFullscreen
+        val window = activity?.window ?: return
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
         if (isFullscreen) {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            @Suppress("DEPRECATION")
-            activity?.window?.decorView?.systemUiVisibility = (
-                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-                    or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            )
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         } else {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            @Suppress("DEPRECATION")
-            activity?.window?.decorView?.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            controller.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
     LaunchedEffect(episodeId) {
-        viewModel.resolveStream(episodeId, title, contentId)
+        val state = viewModel.uiState.value
+        if (state.streamUrl.isEmpty() || state.episodes.isEmpty()) {
+            viewModel.resolveStream(episodeId, title, contentId)
+        }
+    }
+
+    BackHandler(enabled = isFullscreen) {
+        toggleFullscreen()
     }
 
     DisposableEffect(Unit) {
         onDispose {
             if (isFullscreen) {
                 activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                @Suppress("DEPRECATION")
-                activity?.window?.decorView?.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
+                val window = activity?.window
+                if (window != null) {
+                    val controller = WindowCompat.getInsetsController(window, window.decorView)
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                }
             }
         }
     }
@@ -257,6 +269,19 @@ fun StreamPlayerScreen(
                             color = TextGray.copy(alpha = 0.5f),
                             style = MaterialTheme.typography.bodySmall
                         )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextButton(
+                            onClick = { viewModel.resolveStream(episodeId, title, contentId) },
+                            modifier = Modifier
+                                .background(NetflixRed.copy(alpha = 0.9f), RoundedCornerShape(4.dp))
+                        ) {
+                            Text(
+                                text = "Retry",
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
                     }
                 }
             }
@@ -456,23 +481,50 @@ private fun ExoPlayerContent(
     var playerError by remember { mutableStateOf<String?>(null) }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
+    var isReleased by remember { mutableStateOf(false) }
 
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
-                        onPlaybackEnded()
+                        if (!isReleased) onPlaybackEnded()
                     }
                     if (playbackState == Player.STATE_READY) {
-                        duration = this@apply.duration
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            if (!isReleased) {
+                                duration = this@apply.duration
+                            }
+                        }
                     }
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
-                    playerError = error.message ?: "Playback error"
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        if (!isReleased) {
+                            playerError = error.message ?: "Playback error"
+                        }
+                    }
                 }
             })
+        }
+    }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = object : androidx.lifecycle.LifecycleEventObserver {
+            override fun onStateChanged(source: androidx.lifecycle.LifecycleOwner, event: androidx.lifecycle.Lifecycle.Event) {
+                when (event) {
+                    androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> exoPlayer.playWhenReady = false
+                    androidx.lifecycle.Lifecycle.Event.ON_RESUME -> exoPlayer.playWhenReady = true
+                    else -> {}
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -485,23 +537,26 @@ private fun ExoPlayerContent(
     }
 
     LaunchedEffect(exoPlayer) {
-        while (isActive) {
-            if (exoPlayer.isPlaying) {
-                currentPosition = exoPlayer.currentPosition
-                duration = exoPlayer.duration
-            }
+        while (isActive && !isReleased) {
+            try {
+                if (exoPlayer.isPlaying) {
+                    currentPosition = exoPlayer.currentPosition
+                    duration = exoPlayer.duration
+                }
+            } catch (_: Exception) {}
             delay(500)
         }
     }
 
     DisposableEffect(Unit) {
         onDispose {
+            isReleased = true
             exoPlayer.release()
         }
     }
 
-    val showSkipOpening = duration > 0 && duration > 90_000 && currentPosition in 60_000..90_000
     val showSkipEnding = duration > 0 && duration > 180_000 && duration - currentPosition in 1_000..90_000 && currentPosition > duration / 2
+    val showSkipOpening = !showSkipEnding && duration > 0 && duration > 90_000 && currentPosition in 60_000..90_000
 
     Box(
         modifier = Modifier

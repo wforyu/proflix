@@ -76,6 +76,32 @@ fun DetailScreen(
         return
     }
 
+    if (uiState.error != null && uiState.content == null) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "Terjadi kesalahan",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = uiState.error ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(onClick = { viewModel.loadDetail() }) {
+                    Text("Coba Lagi")
+                }
+            }
+        }
+        return
+    }
+
     val content = uiState.content ?: return
 
     val allEpisodes = uiState.episodes
@@ -241,7 +267,7 @@ fun DetailScreen(
                         Box {
                             OutlinedButton(onClick = { dropdownExpanded = true }) {
                                 Text(
-                                    text = "Ep ${selectedPage * pageSize + 1}-${(selectedPage + 1) * pageSize.coerceAtMost(allEpisodes.size)}",
+                                    text = "Ep ${selectedPage * pageSize + 1}-${((selectedPage + 1) * pageSize).coerceAtMost(allEpisodes.size)}",
                                     color = Color.White,
                                     style = MaterialTheme.typography.labelMedium
                                 )
@@ -258,7 +284,7 @@ fun DetailScreen(
                             ) {
                                 for (page in 0 until totalPages) {
                                     val from = page * pageSize + 1
-                                    val to = (page + 1) * pageSize.coerceAtMost(allEpisodes.size)
+                                    val to = ((page + 1) * pageSize).coerceAtMost(allEpisodes.size)
                                     DropdownMenuItem(
                                         text = {
                                             Text(
@@ -279,7 +305,7 @@ fun DetailScreen(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            items(pagedEpisodes) { episode ->
+            items(pagedEpisodes, key = { it.id }) { episode ->
                 EpisodeItem(
                     episode = episode,
                     onClick = { onPlayEpisode(content.id, episode.id, episode.title.ifBlank { "Episode ${episode.number}" }) }
@@ -325,7 +351,7 @@ private fun EpisodeItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "E${episode.number} - ${episode.title}",
+                    text = "E${episode.number} - ${episode.title.ifBlank { "Episode ${episode.number}" }}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White,
                     maxLines = 1,

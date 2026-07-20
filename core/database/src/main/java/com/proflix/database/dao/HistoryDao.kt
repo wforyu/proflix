@@ -15,12 +15,12 @@ interface HistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHistory(history: HistoryEntity)
 
-    @Query("DELETE FROM history WHERE contentId = :contentId")
-    suspend fun deleteHistory(contentId: String)
+    @Query("DELETE FROM history WHERE contentId = :contentId AND episodeId = :episodeId")
+    suspend fun deleteHistory(contentId: String, episodeId: String)
 
     @Query("DELETE FROM history")
     suspend fun clearHistory()
 
-    @Query("SELECT * FROM history WHERE contentId = :contentId")
+    @Query("SELECT * FROM history WHERE contentId = :contentId ORDER BY lastWatched DESC LIMIT 1")
     suspend fun getHistoryById(contentId: String): HistoryEntity?
 }

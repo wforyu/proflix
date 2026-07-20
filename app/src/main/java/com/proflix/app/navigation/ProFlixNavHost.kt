@@ -140,8 +140,14 @@ fun ProFlixNavHost() {
             playerScreen(
                 onBack = { navController.popBackStack() },
                 onNavigateToEpisode = { episodeId, title, contentId ->
-                    navController.popBackStack()
-                    navController.navigateToPlayer(episodeId, title, contentId)
+                    navController.navigate(
+                        com.proflix.feature.player.PLAYER_ROUTE
+                            .replace("{episodeId}", java.net.URLEncoder.encode(episodeId, "UTF-8"))
+                            .replace("{title}", java.net.URLEncoder.encode(title, "UTF-8"))
+                            .replace("{contentId}", java.net.URLEncoder.encode(contentId, "UTF-8"))
+                    ) {
+                        popUpTo(com.proflix.feature.player.PLAYER_ROUTE) { inclusive = true }
+                    }
                 }
             )
         }

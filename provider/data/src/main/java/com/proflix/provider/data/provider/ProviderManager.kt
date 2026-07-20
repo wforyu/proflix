@@ -4,6 +4,7 @@ import com.proflix.provider.domain.Provider
 import com.proflix.provider.domain.ProviderType
 import com.proflix.provider.domain.model.HomeContent
 import com.proflix.common.utils.Result
+import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -13,10 +14,11 @@ class ProviderManager @Inject constructor(
     private val samehadakuProvider: SamehadakuProvider,
     private val oploverzProvider: OploverzProvider
 ) {
-    private var currentType: ProviderType = ProviderType.ANOBOY
+    private val currentType = AtomicReference(ProviderType.ANOBOY)
 
+    @Synchronized
     fun getCurrentProvider(): Provider {
-        return when (currentType) {
+        return when (currentType.get()) {
             ProviderType.ANOBOY -> anoboyProvider
             ProviderType.SAMEHADAKU -> samehadakuProvider
             ProviderType.OPLOVERZ -> oploverzProvider
@@ -31,11 +33,12 @@ class ProviderManager @Inject constructor(
         }
     }
 
+    @Synchronized
     fun setProvider(type: ProviderType) {
-        currentType = type
+        currentType.set(type)
     }
 
-    fun getCurrentType(): ProviderType = currentType
+    fun getCurrentType(): ProviderType = currentType.get()
 
     fun getAvailableProviders(): List<ProviderType> = ProviderType.entries
 
