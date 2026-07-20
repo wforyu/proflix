@@ -11,6 +11,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.serialization.json.Json
 import okhttp3.Cache
+import okhttp3.CookieJar
+import okhttp3.Cookie
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -40,8 +43,21 @@ object NetworkModule {
         retryInterceptor: RetryInterceptor,
         cache: Cache
     ): OkHttpClient {
+        val cookieStore = mutableMapOf<String, List<Cookie>>()
+
+        val cookieJar = object : CookieJar {
+            override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+                cookieStore[url.host] = cookies
+            }
+
+            override fun loadForRequest(url: HttpUrl): List<Cookie> {
+                return cookieStore[url.host] ?: emptyList()
+            }
+        }
+
         val builder = OkHttpClient.Builder()
             .cache(cache)
+            .cookieJar(cookieJar)
             .addInterceptor(cacheInterceptor)
             .addInterceptor(retryInterceptor)
             .connectTimeout(Constants.DEFAULT_TIMEOUT, TimeUnit.SECONDS)

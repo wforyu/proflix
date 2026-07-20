@@ -142,7 +142,7 @@ class SamehadakuProvider @Inject constructor(
 
                 if (dataPost.isBlank() || dataNume.isBlank()) continue
 
-                val iframeUrl = fetchPlayerEmbed(dataPost, dataNume)
+                val iframeUrl = fetchPlayerEmbed(dataPost, dataNume, url)
                 if (iframeUrl == null) {
                     Log.w(TAG, "No iframe from server $label")
                     continue
@@ -306,10 +306,10 @@ class SamehadakuProvider @Inject constructor(
         return episodes
     }
 
-    private fun fetchPlayerEmbed(postId: String, nume: String): String? {
+    private fun fetchPlayerEmbed(postId: String, nume: String, episodeUrl: String = BASE_URL): String? {
         return try {
             val body = FormBody.Builder()
-                .add("action", "east_player")
+                .add("action", "player_ajax")
                 .add("post", postId)
                 .add("nume", nume)
                 .add("type", "schtml")
@@ -319,21 +319,34 @@ class SamehadakuProvider @Inject constructor(
                 .url("$BASE_URL/wp-admin/admin-ajax.php")
                 .post(body)
                 .addHeader("User-Agent", USER_AGENT)
-                .addHeader("Accept", "*/*")
+                .addHeader("Accept", "text/html, */*; q=0.01")
+                .addHeader("Accept-Language", "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7")
                 .addHeader("X-Requested-With", "XMLHttpRequest")
-                .addHeader("Referer", BASE_URL)
+                .addHeader("Origin", BASE_URL)
+                .addHeader("Referer", episodeUrl)
                 .build()
 
+            Log.d(TAG, "Fetching player embed: post=$postId, nume=$nume")
             val response = okHttpClient.newCall(request).execute()
             val html = response.use { it.body?.string() } ?: return null
 
+            Log.d(TAG, "AJAX response length=${html.length}, startsWith: ${html.take(200)}")
+
+            if (html.contains("challenge-platform") || html.contains("Just a moment")) {
+                Log.w(TAG, "Cloudflare challenge detected for post=$postId nume=$nume")
+                return null
+            }
+
             val doc = Jsoup.parse(html, BASE_URL)
+
             val iframe = doc.selectFirst("iframe[src]")
             val src = iframe?.attr("src")?.trim()
 
             if (!src.isNullOrBlank()) {
+                Log.d(TAG, "Found iframe src: $src")
                 resolveAbsoluteUrl(src)
             } else {
+                Log.w(TAG, "No iframe found in AJAX response. Response: ${html.take(500)}")
                 null
             }
         } catch (e: Exception) {
