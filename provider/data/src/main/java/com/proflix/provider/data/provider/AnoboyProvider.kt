@@ -1,6 +1,6 @@
 package com.proflix.provider.data.provider
 
-import android.util.Base64
+import android.util.Log
 import com.proflix.common.utils.Result
 import com.proflix.common.utils.safeCall
 import com.proflix.core.network.EmbedVideoExtractor
@@ -22,10 +22,11 @@ class AnoboyProvider @Inject constructor(
     private val okHttpClient: OkHttpClient
 ) : Provider {
 
-    private val embedExtractor = EmbedVideoExtractor(okHttpClient)
+    private val streamExtractor = AnoboyStreamExtractor(okHttpClient)
 
     companion object {
         var BASE_URL = "https://anoboy.pk"
+        private const val TAG = "AnoboyProvider"
     }
 
     override suspend fun getHome(): Result<HomeContent> = withContext(Dispatchers.IO) {
@@ -167,22 +168,12 @@ class AnoboyProvider @Inject constructor(
                 val label = option.text().trim()
                 if (value.isNotBlank() && label.isNotBlank() && label != "Select Video Server") {
                     try {
-                        val decoded = String(Base64.decode(value, Base64.DEFAULT))
-                        val srcRegex = Regex("""src\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-                        val match = srcRegex.find(decoded)
-                        val iframeSrc = match?.groupValues?.get(1) ?: ""
-                        if (iframeSrc.isNotBlank()) {
-                            if (EmbedVideoExtractor.isDirectVideoUrl(iframeSrc)) {
-                                val format = EmbedVideoExtractor.detectFormat(iframeSrc)
-                                sources.add(StreamSource(url = iframeSrc, quality = label, format = format.extension))
-                            } else {
-                                val result = embedExtractor.extract(iframeSrc)
-                                if (result != null) {
-                                    sources.add(StreamSource(url = result.url, quality = label, format = result.format.extension))
-                                }
-                            }
+                        val result = streamExtractor.resolveFromMirrorOption(value, label)
+                        if (result != null) {
+                            sources.add(StreamSource(url = result.url, quality = result.quality, format = result.format))
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w(TAG, "mirror resolve failed: ${e.message}")
                     }
                 }
             }
@@ -191,14 +182,13 @@ class AnoboyProvider @Inject constructor(
                 doc.select("#pembed iframe, .player-embed iframe, #embed_holder iframe").forEach { iframe ->
                     val src = iframe.attr("abs:src").ifBlank { iframe.attr("abs:data-src") }
                     if (src.isNotBlank() && !src.contains("about:blank")) {
-                        if (EmbedVideoExtractor.isDirectVideoUrl(src)) {
-                            val format = EmbedVideoExtractor.detectFormat(src)
-                            sources.add(StreamSource(url = src, quality = "default", format = format.extension))
-                        } else {
-                            val result = embedExtractor.extract(src)
+                        try {
+                            val result = streamExtractor.resolve(src, "default")
                             if (result != null) {
-                                sources.add(StreamSource(url = result.url, quality = "default", format = result.format.extension))
+                                sources.add(StreamSource(url = result.url, quality = result.quality, format = result.format))
                             }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "iframe resolve failed: ${e.message}")
                         }
                     }
                 }
@@ -209,14 +199,13 @@ class AnoboyProvider @Inject constructor(
                     val quality = dl.selectFirst("strong")?.text() ?: "default"
                     val url = dl.selectFirst("a")?.attr("abs:href") ?: ""
                     if (url.isNotBlank()) {
-                        if (EmbedVideoExtractor.isDirectVideoUrl(url)) {
-                            val format = EmbedVideoExtractor.detectFormat(url)
-                            sources.add(StreamSource(url = url, quality = quality, format = format.extension))
-                        } else {
-                            val result = embedExtractor.extract(url)
+                        try {
+                            val result = streamExtractor.resolve(url, quality)
                             if (result != null) {
-                                sources.add(StreamSource(url = result.url, quality = quality, format = result.format.extension))
+                                sources.add(StreamSource(url = result.url, quality = result.quality, format = result.format))
                             }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "download link resolve failed: ${e.message}")
                         }
                     }
                 }

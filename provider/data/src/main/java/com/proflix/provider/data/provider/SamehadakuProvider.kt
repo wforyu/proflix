@@ -75,8 +75,7 @@ class SamehadakuProvider @Inject constructor(
             val html = fetchHtml(url)
             val doc = Jsoup.parse(html, url)
 
-            val ldJson = extractLdJson(doc)
-            val tvSeries = ldJson?.optJSONObject("tvSeries") ?: ldJson
+            val tvSeries = extractLdJson(doc)
 
             val title = tvSeries?.optString("name", "")?.ifBlank { null }
                 ?: doc.selectFirst("h1")?.text()
@@ -115,17 +114,8 @@ class SamehadakuProvider @Inject constructor(
                     }
                 }
             }
-            if (year.isBlank()) {
-                for (el in doc.select("dl div, dt, dd")) {
-                    val text = el.text()
-                    when {
-                        text.contains("Tahun") || text.contains("Year") ->
-                            year = text.substringAfter(":").trim().ifBlank { year }
-                    }
-                }
-            }
             val ratingObj = tvSeries?.optJSONObject("aggregateRating")
-            rating = ratingObj?.opt("ratingValue")?.toString() ?: rating
+            rating = ratingObj?.optString("ratingValue", "") ?: rating
 
             val animeType = tvSeries?.optString("@type", "") ?: ""
             val contentType = when {
@@ -281,7 +271,9 @@ class SamehadakuProvider @Inject constructor(
             .build()
 
         val response = okHttpClient.newCall(request).execute()
-        return response.body?.string() ?: throw Exception("Empty response")
+        response.use {
+            return it.body?.string() ?: throw Exception("Empty response")
+        }
     }
 
     private fun getImageUrl(element: Element?): String? {
@@ -308,14 +300,8 @@ class SamehadakuProvider @Inject constructor(
     }
 
     private fun extractEpisodeNumberFromLdJson(html: String): Int? {
-        val patterns = listOf(
-            Regex("""\"episodeNumber\"\s*:\s*(\d+)"""),
-            Regex("""\"episodeNumber\":\s*(\d+)""")
-        )
-        for (pattern in patterns) {
-            pattern.find(html)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
-        }
-        return null
+        val pattern = Regex("""\"episodeNumber\"\s*:\s*(\d+)""")
+        return pattern.find(html)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     private fun fetchVideoMirrors(episodeId: Int): List<StreamSource> {
@@ -329,7 +315,7 @@ class SamehadakuProvider @Inject constructor(
                 .build()
 
             val response = okHttpClient.newCall(request).execute()
-            val body = response.body?.string() ?: return sources
+            val body = response.use { it.body?.string() } ?: return sources
             val json = JSONObject(body)
             val mirrors = json.optJSONArray("mirrors")
                 ?: json.optJSONArray("data")
@@ -356,7 +342,9 @@ class SamehadakuProvider @Inject constructor(
                     )
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.w("SamehadakuProvider", "fetchVideoMirrors failed: ${e.message}")
+        }
 
         return sources
     }

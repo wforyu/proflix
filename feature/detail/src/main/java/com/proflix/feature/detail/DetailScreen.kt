@@ -61,7 +61,7 @@ import com.proflix.provider.domain.model.Episode
 @Composable
 fun DetailScreen(
     onBack: () -> Unit,
-    onPlayEpisode: (String, String) -> Unit,
+    onPlayEpisode: (String, String, String) -> Unit,
     viewModel: DetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -182,7 +182,7 @@ fun DetailScreen(
                         onClick = {
                             if (uiState.episodes.isNotEmpty()) {
                                 val firstEp = uiState.episodes.first()
-                                onPlayEpisode(content.id, firstEp.id)
+                                onPlayEpisode(content.id, firstEp.id, firstEp.title.ifBlank { "Episode ${firstEp.number}" })
                             }
                         },
                         modifier = Modifier.weight(1f),
@@ -282,7 +282,7 @@ fun DetailScreen(
             items(pagedEpisodes) { episode ->
                 EpisodeItem(
                     episode = episode,
-                    onClick = { onPlayEpisode(content.id, episode.id) }
+                    onClick = { onPlayEpisode(content.id, episode.id, episode.title.ifBlank { "Episode ${episode.number}" }) }
                 )
             }
         }

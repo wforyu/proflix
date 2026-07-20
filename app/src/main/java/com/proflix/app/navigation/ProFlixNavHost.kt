@@ -131,9 +131,8 @@ fun ProFlixNavHost() {
             ) {
                 DetailScreen(
                     onBack = { navController.popBackStack() },
-                    onPlayEpisode = { contentId, episodeId ->
-                        val title = "Episode"
-                        navController.navigateToPlayer(episodeId, title, contentId)
+                    onPlayEpisode = { contentId, episodeId, episodeTitle ->
+                        navController.navigateToPlayer(episodeId, episodeTitle, contentId)
                     }
                 )
             }
