@@ -9,11 +9,21 @@ import com.proflix.provider.domain.model.Content
 import com.proflix.provider.domain.model.ContinueWatchingItem
 import com.proflix.provider.domain.model.HomeContent
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+data class ProviderContent(
+    val provider: ProviderType,
+    val trending: List<Content>,
+    val latest: List<Content>,
+    val categories: Map<String, List<Content>>
+)
 
 data class HomeUiState(
     val isLoading: Boolean = true,
@@ -22,6 +32,7 @@ data class HomeUiState(
     val latest: List<Content> = emptyList(),
     val continueWatching: List<ContinueWatchingItem> = emptyList(),
     val categories: Map<String, List<Content>> = emptyMap(),
+    val providerContents: List<ProviderContent> = emptyList(),
     val currentProvider: ProviderType = ProviderType.ANOBOY,
     val error: String? = null
 )
@@ -46,26 +57,66 @@ class HomeViewModel @Inject constructor(
                 currentProvider = providerRepository.getCurrentProviderType()
             )
 
-            when (val result = providerRepository.getHome()) {
-                is Result.Success -> {
-                    val home = result.data
-                    _uiState.value = HomeUiState(
-                        isLoading = false,
-                        heroContent = home.heroContent,
-                        trending = home.trending,
-                        latest = home.latest,
-                        continueWatching = home.continueWatching,
-                        categories = home.categories,
-                        currentProvider = providerRepository.getCurrentProviderType()
-                    )
+            try {
+                val allResults = providerRepository.getHomeFromAllProviders()
+
+                val providerContents = mutableListOf<ProviderContent>()
+                var heroContent: Content? = null
+                val allTrending = mutableListOf<Content>()
+                val allLatest = mutableListOf<Content>()
+                val allCategories = mutableMapOf<String, List<Content>>()
+
+                for ((type, result) in allResults) {
+                    if (result is Result.Success) {
+                        val home = result.data
+                        val providerTrending = home.trending
+                        val providerLatest = home.latest
+
+                        providerContents.add(
+                            ProviderContent(
+                                provider = type,
+                                trending = providerTrending,
+                                latest = providerLatest,
+                                categories = home.categories
+                            )
+                        )
+
+                        if (heroContent == null && home.heroContent != null) {
+                            heroContent = home.heroContent
+                        }
+
+                        if (providerTrending.isNotEmpty()) {
+                            allTrending.addAll(providerTrending)
+                        }
+                        if (providerLatest.isNotEmpty()) {
+                            allLatest.addAll(providerLatest)
+                        }
+
+                        for ((key, value) in home.categories) {
+                            val prefixedKey = "${type.displayName} - $key"
+                            if (value.isNotEmpty()) {
+                                allCategories[prefixedKey] = value
+                            }
+                        }
+                    }
                 }
-                is Result.Error -> {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        error = result.message
-                    )
-                }
-                is Result.Loading -> {}
+
+                _uiState.value = HomeUiState(
+                    isLoading = false,
+                    heroContent = heroContent,
+                    trending = allTrending,
+                    latest = allLatest,
+                    continueWatching = emptyList(),
+                    categories = allCategories,
+                    providerContents = providerContents,
+                    currentProvider = providerRepository.getCurrentProviderType(),
+                    error = if (providerContents.isEmpty()) "Failed to load from all providers" else null
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = e.message ?: "Unknown error"
+                )
             }
         }
     }

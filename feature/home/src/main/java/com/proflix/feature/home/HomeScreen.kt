@@ -127,15 +127,55 @@ fun HomeScreen(
             }
         }
 
-        if (uiState.trending.isNotEmpty()) {
-            item {
-                SectionHeader("Trending")
+        if (uiState.providerContents.isNotEmpty()) {
+            for (providerContent in uiState.providerContents) {
+                if (providerContent.trending.isNotEmpty()) {
+                    item {
+                        SectionHeader("${providerContent.provider.displayName} - Trending")
+                    }
+                    item {
+                        ContentRow(
+                            contents = providerContent.trending,
+                            onContentClick = onContentClick
+                        )
+                    }
+                }
+
+                if (providerContent.latest.isNotEmpty()) {
+                    item {
+                        SectionHeader("${providerContent.provider.displayName} - Latest")
+                    }
+                    item {
+                        ContentRow(
+                            contents = providerContent.latest,
+                            onContentClick = onContentClick
+                        )
+                    }
+                }
             }
-            item {
-                ContentRow(
-                    contents = uiState.trending,
-                    onContentClick = onContentClick
-                )
+        } else {
+            if (uiState.trending.isNotEmpty()) {
+                item {
+                    SectionHeader("Trending")
+                }
+                item {
+                    ContentRow(
+                        contents = uiState.trending,
+                        onContentClick = onContentClick
+                    )
+                }
+            }
+
+            if (uiState.latest.isNotEmpty()) {
+                item {
+                    SectionHeader("Latest")
+                }
+                item {
+                    ContentRow(
+                        contents = uiState.latest,
+                        onContentClick = onContentClick
+                    )
+                }
             }
         }
 
@@ -146,18 +186,6 @@ fun HomeScreen(
             item {
                 ContinueWatchingRow(
                     items = uiState.continueWatching,
-                    onContentClick = onContentClick
-                )
-            }
-        }
-
-        if (uiState.latest.isNotEmpty()) {
-            item {
-                SectionHeader("Latest")
-            }
-            item {
-                ContentRow(
-                    contents = uiState.latest,
                     onContentClick = onContentClick
                 )
             }

@@ -26,4 +26,5 @@ interface ProviderRepository {
     fun getDefaultDomain(type: ProviderType): String
     fun setCustomDomain(type: ProviderType, domain: String)
     suspend fun getProviderName(): String
+    suspend fun getHomeFromAllProviders(): Map<ProviderType, Result<HomeContent>>
 }

@@ -3,7 +3,6 @@ package com.proflix.provider.data.provider
 import android.util.Log
 import com.proflix.common.utils.Result
 import com.proflix.common.utils.safeCall
-import com.proflix.core.network.EmbedVideoExtractor
 import com.proflix.provider.domain.Provider
 import com.proflix.provider.domain.model.Content
 import com.proflix.provider.domain.model.ContentType
@@ -12,12 +11,10 @@ import com.proflix.provider.domain.model.HomeContent
 import com.proflix.provider.domain.model.StreamSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,7 +23,7 @@ class SamehadakuProvider @Inject constructor(
     private val okHttpClient: OkHttpClient
 ) : Provider {
 
-    private val embedExtractor = EmbedVideoExtractor(okHttpClient)
+    private val streamExtractor = SamehadakuStreamExtractor(okHttpClient)
 
     companion object {
         var BASE_URL = "https://v2.samehadaku.how"
@@ -142,41 +139,21 @@ class SamehadakuProvider @Inject constructor(
 
                 if (dataPost.isBlank() || dataNume.isBlank()) continue
 
-                val iframeUrl = fetchPlayerEmbed(dataPost, dataNume, url)
-                if (iframeUrl == null) {
-                    Log.w(TAG, "No iframe from server $label")
-                    continue
+                val results = streamExtractor.resolveFromAjaxResponse(dataPost, dataNume, url, BASE_URL)
+                for (result in results) {
+                    sources.add(StreamSource(url = result.url, quality = label, format = result.format))
                 }
 
-                if (EmbedVideoExtractor.isDirectVideoUrl(iframeUrl)) {
-                    val format = EmbedVideoExtractor.detectFormat(iframeUrl)
-                    sources.add(StreamSource(url = iframeUrl, quality = label, format = format.extension))
-                } else {
-                    val result = embedExtractor.extract(iframeUrl)
-                    if (result != null) {
-                        sources.add(StreamSource(url = result.url, quality = label, format = result.format.extension))
-                    } else {
-                        Log.w(TAG, "EmbedVideoExtractor failed for $label: $iframeUrl")
-                    }
+                if (results.isEmpty()) {
+                    Log.w(TAG, "No stream from server $label")
                 }
             }
 
             if (sources.isEmpty()) {
-                val iframes = doc.select("iframe[src]")
-                for (iframe in iframes) {
-                    val src = iframe.attr("src").trim()
-                    if (src.isBlank() || src.contains("facebook") || src.contains("about:blank")) continue
-
-                    val fullUrl = resolveAbsoluteUrl(src) ?: continue
-                    if (EmbedVideoExtractor.isDirectVideoUrl(fullUrl)) {
-                        val format = EmbedVideoExtractor.detectFormat(fullUrl)
-                        sources.add(StreamSource(url = fullUrl, quality = "default", format = format.extension))
-                    } else {
-                        val result = embedExtractor.extract(fullUrl)
-                        if (result != null) {
-                            sources.add(StreamSource(url = result.url, quality = "default", format = result.format.extension))
-                        }
-                    }
+                Log.w(TAG, "No streams from server tabs, trying fallback iframe parsing")
+                val fallbackResults = streamExtractor.resolveFromEpisodePage(url)
+                for (result in fallbackResults) {
+                    sources.add(StreamSource(url = result.url, quality = result.quality, format = result.format))
                 }
             }
 
@@ -304,65 +281,6 @@ class SamehadakuProvider @Inject constructor(
         }
 
         return episodes
-    }
-
-    private fun fetchPlayerEmbed(postId: String, nume: String, episodeUrl: String = BASE_URL): String? {
-        return try {
-            val body = FormBody.Builder()
-                .add("action", "player_ajax")
-                .add("post", postId)
-                .add("nume", nume)
-                .add("type", "schtml")
-                .build()
-
-            val request = Request.Builder()
-                .url("$BASE_URL/wp-admin/admin-ajax.php")
-                .post(body)
-                .addHeader("User-Agent", USER_AGENT)
-                .addHeader("Accept", "text/html, */*; q=0.01")
-                .addHeader("Accept-Language", "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7")
-                .addHeader("X-Requested-With", "XMLHttpRequest")
-                .addHeader("Origin", BASE_URL)
-                .addHeader("Referer", episodeUrl)
-                .build()
-
-            Log.d(TAG, "Fetching player embed: post=$postId, nume=$nume")
-            val response = okHttpClient.newCall(request).execute()
-            val html = response.use { it.body?.string() } ?: return null
-
-            Log.d(TAG, "AJAX response length=${html.length}, startsWith: ${html.take(200)}")
-
-            if (html.contains("challenge-platform") || html.contains("Just a moment")) {
-                Log.w(TAG, "Cloudflare challenge detected for post=$postId nume=$nume")
-                return null
-            }
-
-            val doc = Jsoup.parse(html, BASE_URL)
-
-            val iframe = doc.selectFirst("iframe[src]")
-            val src = iframe?.attr("src")?.trim()
-
-            if (!src.isNullOrBlank()) {
-                Log.d(TAG, "Found iframe src: $src")
-                resolveAbsoluteUrl(src)
-            } else {
-                Log.w(TAG, "No iframe found in AJAX response. Response: ${html.take(500)}")
-                null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "fetchPlayerEmbed failed: ${e.message}")
-            null
-        }
-    }
-
-    private fun resolveAbsoluteUrl(url: String): String? {
-        if (url.isBlank()) return null
-        return when {
-            url.startsWith("http") -> url
-            url.startsWith("//") -> "https:$url"
-            url.startsWith("/") -> "$BASE_URL$url"
-            else -> url
-        }
     }
 
     private fun resolveUrl(id: String): String {

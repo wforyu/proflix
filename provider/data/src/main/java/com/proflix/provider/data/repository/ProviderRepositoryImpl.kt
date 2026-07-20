@@ -67,4 +67,8 @@ class ProviderRepositoryImpl @Inject constructor(
     override suspend fun getProviderName(): String {
         return providerManager.getCurrentProvider().getProviderName()
     }
+
+    override suspend fun getHomeFromAllProviders(): Map<ProviderType, Result<HomeContent>> {
+        return providerManager.getHomeFromAllProviders()
+    }
 }
